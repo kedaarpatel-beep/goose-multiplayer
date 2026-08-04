@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer Goose First-Person Portals</title>
+    <title>Multiplayer FPS Goose World</title>
     <style>
         body { 
             margin: 0; 
@@ -12,7 +12,7 @@
             background-color: #70d6ff; 
             user-select: none;
         }
-        #canvas-container { width: 100vw; height: 100vh; }
+        #canvas-container { width: 100vw; height: 100vh; cursor: pointer; }
         #hud {
             position: absolute; top: 20px; left: 20px;
             background: rgba(255, 255, 255, 0.9); color: #1b4332;
@@ -33,13 +33,14 @@
             background: rgba(255, 255, 255, 0.9); color: #000;
             padding: 10px 15px; border-radius: 8px; font-size: 12px;
             border: 3px solid #1b4332; font-weight: bold;
+            pointer-events: none;
         }
         #crosshair {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 8px; height: 8px;
-            background: rgba(255, 255, 255, 0.8);
-            border: 2px solid #000;
+            width: 6px; height: 6px;
+            background: #ffffff;
+            border: 2px solid #000000;
             border-radius: 50%;
             pointer-events: none;
         }
@@ -52,36 +53,41 @@
     <div id="canvas-container"></div>
     <div id="crosshair"></div>
     <div id="hud">
-        <h1>🪿 First-Person Goose</h1>
+        <h1>🪿 FPS Goose Squad</h1>
         <p>Active Geese: <span id="geese-count">1</span></p>
     </div>
     <div id="honk-text">HONK!</div>
     <div id="controls">
-        [W, A, S, D] / Arrows : Walk<br>
-        [SPACE] : HONK!<br>
-        Walk through the portal to enter the barn!
+        <b>CLICK SCREEN TO LOCK MOUSE</b><br>
+        [W, A, S, D] : Walk<br>
+        [SPACE] : Jump<br>
+        [LEFT CLICK / E] : HONK!
     </div>
 
     <script>
         let scene, mainCamera, renderer, socket;
-        let localGoose, localGooseHead, beakMesh;
+        let localGoose, pitchObject;
         let otherGeese = {};
         let keys = {};
         let toonGradientMap;
         const terrainSize = 180;
 
-        // --- PORTAL SYSTEM VARIABLES ---
-        let portalA, portalB; 
-        let portalCamA, portalCamB; 
-        let renderTargetA, renderTargetB;
+        // FPS Physics / Controls
+        let isPointerLocked = false;
+        let velocityY = 0;
+        let isGrounded = true;
+        const gravity = -0.015;
+        const jumpStrength = 0.35;
+
+        // Portals (One-Way: Barn -> Meadow)
+        let portalExitFrame, portalExitScreen;
+        let portalCam, renderTarget;
         let canTeleport = true;
 
-        // Portal A in Meadow, Portal B inside Hollow Barn
-        const posA = new THREE.Vector3(0, 0, 15);
-        const posB = new THREE.Vector3(60, 1.5, 60);
+        const posOutside = new THREE.Vector3(0, 0, 15); // Portal Exit Target (Meadow)
+        const posBarnPortal = new THREE.Vector3(60, 2.5, 60); // Portal Location (Barn Interior)
 
         function getHillHeight(x, z) {
-            // Keep barn interior and portal areas perfectly flat
             if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
             const h1 = Math.sin(x * 0.08) * 5.0 + Math.cos(z * 0.08) * 5.0;
             const h2 = Math.sin((x + z) * 0.04) * 6.0;
@@ -106,6 +112,11 @@
         function buildGooseMesh(accentColor = 0xff7b00, isLocal = false) {
             const group = new THREE.Group();
             
+            if (isLocal) {
+                // Invisible local player structure to avoid visual obstruction
+                return { group, headGroup: group };
+            }
+
             // Body
             const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
             bodyGeo.scale(1, 0.85, 1.4);
@@ -134,14 +145,7 @@
             headGroup.add(beak);
 
             group.add(headGroup);
-
-            // Hide body for local first-person player so it doesn't block vision
-            if (isLocal) {
-                body.visible = false;
-                neck.visible = false;
-            }
-
-            return { group, headGroup, beak };
+            return { group, headGroup };
         }
 
         function init() {
@@ -153,9 +157,39 @@
 
             mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
+            // Set up FPS camera hierarchy: localGoose (Yaw) -> pitchObject (Pitch) -> mainCamera
+            localGoose = new THREE.Group();
+            pitchObject = new THREE.Group();
+            pitchObject.position.y = 1.6; // Eye level
+            pitchObject.add(mainCamera);
+            localGoose.add(pitchObject);
+            scene.add(localGoose);
+
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            document.getElementById('canvas-container').appendChild(renderer.domElement);
+            const container = document.getElementById('canvas-container');
+            container.appendChild(renderer.domElement);
+
+            // Pointer Lock Event Listeners
+            container.addEventListener('click', () => {
+                container.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isPointerLocked = (document.pointerLockElement === container);
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isPointerLocked) return;
+                
+                // Sensitivity
+                const mouseSensitivity = 0.002;
+                localGoose.rotation.y -= e.movementX * mouseSensitivity;
+                pitchObject.rotation.x -= e.movementY * mouseSensitivity;
+                
+                // Clamp look up/down angles
+                pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
+            });
 
             // Toon Texture
             const canvas = document.createElement('canvas');
@@ -175,18 +209,7 @@
 
             createTerrain();
             createHollowBarn();
-            setupPortals();
-
-            // Local First-Person Player
-            const localMesh = buildGooseMesh(0xff5722, true);
-            localGoose = localMesh.group;
-            localGooseHead = localMesh.headGroup;
-            beakMesh = localMesh.beak;
-            scene.add(localGoose);
-
-            // Attach camera inside goose head for First-Person
-            localGooseHead.add(mainCamera);
-            mainCamera.position.set(0, 1.25, -0.3);
+            setupOneWayPortal();
 
             // Network Handlers
             socket.on('currentPlayers', (players) => {
@@ -229,17 +252,28 @@
 
             window.addEventListener('keydown', (e) => {
                 keys[e.code] = true;
-                if (e.code === 'Space') {
+                if (e.code === 'Space' && isGrounded) {
+                    velocityY = jumpStrength;
+                    isGrounded = false;
+                }
+                if (e.code === 'KeyE') {
                     honk();
                     socket.emit('honk');
                 }
             });
+            
             window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+            window.addEventListener('mousedown', (e) => {
+                if (isPointerLocked && e.button === 0) {
+                    honk();
+                    socket.emit('honk');
+                }
+            });
 
             animate();
         }
 
-        // --- HOLLOW BARN WITH INTERIOR ---
+        // --- HOLLOW BARN ---
         function createHollowBarn() {
             const barn = new THREE.Group();
             barn.position.set(60, 0, 60);
@@ -248,13 +282,11 @@
             const woodMat = createToonMaterial(0x8b5a2b, THREE.DoubleSide);
             const darkRoofMat = createToonMaterial(0x3a1e05, THREE.DoubleSide);
 
-            // Barn Floor inside
             const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(18, 22), woodMat);
             floorMesh.rotation.x = -Math.PI / 2;
             floorMesh.position.y = 0.1;
             barn.add(floorMesh);
 
-            // Left & Right Outer Walls
             const sideWallGeo = new THREE.BoxGeometry(0.6, 9, 22);
             const leftWall = new THREE.Mesh(sideWallGeo, redMat);
             leftWall.position.set(-9, 4.5, 0);
@@ -266,14 +298,12 @@
             attachOutline(rightWall, 1.02);
             barn.add(rightWall);
 
-            // Back Wall
             const backWallGeo = new THREE.BoxGeometry(18, 9, 0.6);
             const backWall = new THREE.Mesh(backWallGeo, redMat);
             backWall.position.set(0, 4.5, 11);
             attachOutline(backWall, 1.02);
             barn.add(backWall);
 
-            // Front Walls with Open Doorway in Center
             const frontWallGeo = new THREE.BoxGeometry(6, 9, 0.6);
             const frontLeft = new THREE.Mesh(frontWallGeo, redMat);
             frontLeft.position.set(-6, 4.5, -11);
@@ -285,7 +315,6 @@
             attachOutline(frontRight, 1.02);
             barn.add(frontRight);
 
-            // Roof (Pitched Slants)
             const roofGeo = new THREE.BoxGeometry(11, 0.5, 23);
             const leftRoof = new THREE.Mesh(roofGeo, darkRoofMat);
             leftRoof.position.set(-4.5, 11, 0);
@@ -302,43 +331,28 @@
             scene.add(barn);
         }
 
-        // --- SEAMLESS LIVE PORTALS ---
-        function setupPortals() {
-            posA.y = getHillHeight(posA.x, posA.z) + 3;
+        // --- ONE-WAY PORTAL FROM BARN TO MEADOW ---
+        function setupOneWayPortal() {
+            posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 1.6;
 
-            renderTargetA = new THREE.WebGLRenderTarget(1024, 1024);
-            renderTargetB = new THREE.WebGLRenderTarget(1024, 1024);
-
-            portalCamA = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
-            portalCamB = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
+            renderTarget = new THREE.WebGLRenderTarget(1024, 1024);
+            portalCam = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 
             const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
             const frameMat = createToonMaterial(0xff0077);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // PORTAL A (Meadow)
-            portalA = new THREE.Group();
-            portalA.position.copy(posA);
+            portalExitFrame = new THREE.Group();
+            portalExitFrame.position.copy(posBarnPortal);
 
-            const frameA = new THREE.Mesh(frameGeo, frameMat);
-            attachOutline(frameA, 1.05);
-            portalA.add(frameA);
+            const frame = new THREE.Mesh(frameGeo, frameMat);
+            attachOutline(frame, 1.05);
+            portalExitFrame.add(frame);
 
-            const screenA = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetB.texture }));
-            portalA.add(screenA);
-            scene.add(portalA);
+            portalExitScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTarget.texture }));
+            portalExitFrame.add(portalExitScreen);
 
-            // PORTAL B (Inside Barn)
-            portalB = new THREE.Group();
-            portalB.position.copy(posB);
-
-            const frameB = new THREE.Mesh(frameGeo, frameMat);
-            attachOutline(frameB, 1.05);
-            portalB.add(frameB);
-
-            const screenB = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetA.texture }));
-            portalB.add(screenB);
-            scene.add(portalB);
+            scene.add(portalExitFrame);
         }
 
         function createTerrain() {
@@ -367,49 +381,28 @@
             const honkUI = document.getElementById('honk-text');
             honkUI.style.opacity = '1';
             setTimeout(() => { honkUI.style.opacity = '0'; }, 300);
-            
-            localGooseHead.rotation.x = -0.4;
-            setTimeout(() => { localGooseHead.rotation.x = 0; }, 200);
         }
 
-        function updatePortals() {
-            // Compute First-Person Camera Matrix for Portal A -> B
-            const playerRelA = localGoose.position.clone().sub(posA);
-            portalCamA.position.copy(posB).add(playerRelA);
-            portalCamA.rotation.copy(localGoose.rotation);
+        function updatePortalCamera() {
+            // Live-render the meadow target destination inside the portal frame
+            portalCam.position.copy(posOutside);
+            portalCam.rotation.y = localGoose.rotation.y;
+            portalCam.rotation.x = pitchObject.rotation.x;
 
-            portalA.visible = false;
-            renderer.setRenderTarget(renderTargetA);
-            renderer.render(scene, portalCamA);
-            portalA.visible = true;
-
-            // Compute First-Person Camera Matrix for Portal B -> A
-            const playerRelB = localGoose.position.clone().sub(posB);
-            portalCamB.position.copy(posA).add(playerRelB);
-            portalCamB.rotation.copy(localGoose.rotation);
-
-            portalB.visible = false;
-            renderer.setRenderTarget(renderTargetB);
-            renderer.render(scene, portalCamB);
-            portalB.visible = true;
-
+            portalExitScreen.visible = false;
+            renderer.setRenderTarget(renderTarget);
+            renderer.render(scene, portalCam);
             renderer.setRenderTarget(null);
+            portalExitScreen.visible = true;
         }
 
         function checkPortalTeleport() {
             if (!canTeleport) return;
 
-            // Teleport Meadow -> Barn
-            if (localGoose.position.distanceTo(posA) < 2.5) {
-                localGoose.position.copy(posB);
-                localGoose.position.z += 3.5;
-                canTeleport = false;
-                setTimeout(() => canTeleport = true, 1000);
-            } 
-            // Teleport Barn -> Meadow
-            else if (localGoose.position.distanceTo(posB) < 2.5) {
-                localGoose.position.copy(posA);
-                localGoose.position.z += 3.5;
+            // Teleport ONLY Barn -> Outside Meadow
+            if (localGoose.position.distanceTo(posBarnPortal) < 2.5) {
+                localGoose.position.copy(posOutside);
+                localGoose.position.z += 4.0;
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
@@ -420,14 +413,31 @@
 
             let moved = false;
             const moveSpeed = 0.28;
-            const rotSpeed = 0.05;
 
-            if (keys['KeyW'] || keys['ArrowUp']) { localGoose.translateZ(-moveSpeed); moved = true; }
-            if (keys['KeyS'] || keys['ArrowDown']) { localGoose.translateZ(moveSpeed); moved = true; }
-            if (keys['KeyA'] || keys['ArrowLeft']) { localGoose.rotation.y += rotSpeed; moved = true; }
-            if (keys['KeyD'] || keys['ArrowRight']) { localGoose.rotation.y -= rotSpeed; moved = true; }
+            // Local direction relative to look angle
+            const moveVector = new THREE.Vector3();
+            if (keys['KeyW']) moveVector.z -= 1;
+            if (keys['KeyS']) moveVector.z += 1;
+            if (keys['KeyA']) moveVector.x -= 1;
+            if (keys['KeyD']) moveVector.x += 1;
 
-            localGoose.position.y = getHillHeight(localGoose.position.x, localGoose.position.z);
+            if (moveVector.length() > 0) {
+                moveVector.normalize();
+                moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+                localGoose.position.addScaledVector(moveVector, moveSpeed);
+                moved = true;
+            }
+
+            // Vertical Jump Physics
+            velocityY += gravity;
+            localGoose.position.y += velocityY;
+
+            const floorY = getHillHeight(localGoose.position.x, localGoose.position.z);
+            if (localGoose.position.y <= floorY) {
+                localGoose.position.y = floorY;
+                velocityY = 0;
+                isGrounded = true;
+            }
 
             checkPortalTeleport();
 
@@ -439,8 +449,7 @@
                 });
             }
 
-            // Sync First-Person Portal Camera Feeds
-            updatePortals();
+            updatePortalCamera();
 
             renderer.render(scene, mainCamera);
         }
