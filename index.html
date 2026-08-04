@@ -72,21 +72,22 @@
         let toonGradientMap;
         const terrainSize = 180;
 
-        // FPS Physics
+        // FPS Movement & Physics
         let isPointerLocked = false;
         let velocityY = 0;
         let isGrounded = true;
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        // Portals System
+        // Two-Way Seamless Portals
         let portalBarn, portalBarnScreen;
-        let portalOutsideFrame;
-        let portalCam, renderTarget;
+        let portalOutside, portalOutsideScreen;
+        let portalCamToMeadow, renderTargetMeadow;
+        let portalCamToBarn, renderTargetBarn;
         let canTeleport = true;
 
-        const posOutside = new THREE.Vector3(0, 0, 15); // Meadow Destination
-        const posBarnPortal = new THREE.Vector3(60, 2.5, 60); // Barn Portal Origin
+        const posOutside = new THREE.Vector3(0, 2.5, 15); // Outside Meadow Portal
+        const posBarn = new THREE.Vector3(60, 2.5, 60);    // Inside Barn Portal
 
         function getHillHeight(x, z) {
             if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
@@ -183,11 +184,10 @@
                 const mouseSensitivity = 0.002;
                 localGoose.rotation.y -= e.movementX * mouseSensitivity;
                 pitchObject.rotation.x -= e.movementY * mouseSensitivity;
-                
                 pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
             });
 
-            // Toon Texture
+            // Toon Texture Map
             const canvas = document.createElement('canvas');
             canvas.width = 4; canvas.height = 1;
             const ctx = canvas.getContext('2d');
@@ -205,7 +205,7 @@
 
             createTerrain();
             createHollowBarn();
-            setupPortals();
+            setupTwoWayPortals();
 
             // Network Handlers
             socket.on('currentPlayers', (players) => {
@@ -326,43 +326,47 @@
             scene.add(barn);
         }
 
-        function setupPortals() {
-            posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 1.6;
+        function setupTwoWayPortals() {
+            renderTargetMeadow = new THREE.WebGLRenderTarget(1024, 1024);
+            renderTargetBarn = new THREE.WebGLRenderTarget(1024, 1024);
 
-            renderTarget = new THREE.WebGLRenderTarget(1024, 1024);
-            portalCam = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
+            portalCamToMeadow = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
+            portalCamToBarn = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 
             const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
-            const frameMat = createToonMaterial(0xff0077);
+            const frameMatPink = createToonMaterial(0xff0077);
+            const frameMatBlue = createToonMaterial(0x00f0ff);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // 1. BARN PORTAL (Entrance with view into Meadow)
+            // --- 1. BARN PORTAL (Looking out to Meadow) ---
             portalBarn = new THREE.Group();
-            portalBarn.position.copy(posBarnPortal);
+            portalBarn.position.copy(posBarn);
 
-            const frameBarn = new THREE.Mesh(frameGeo, frameMat);
-            attachOutline(frameBarn, 1.05);
-            portalBarn.add(frameBarn);
+            const frameB = new THREE.Mesh(frameGeo, frameMatPink);
+            attachOutline(frameB, 1.05);
+            portalBarn.add(frameB);
 
-            // DoubleSide material + 180° Y Rotation fixes the inverted backface issue
             portalBarnScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ 
-                map: renderTarget.texture, 
-                side: THREE.DoubleSide 
+                map: renderTargetMeadow.texture, 
+                side: THREE.FrontSide 
             }));
-            portalBarnScreen.rotation.y = Math.PI; 
             portalBarn.add(portalBarnScreen);
-
             scene.add(portalBarn);
 
-            // 2. MEADOW PORTAL (Destination Frame in the open field)
-            portalOutsideFrame = new THREE.Group();
-            portalOutsideFrame.position.copy(posOutside);
+            // --- 2. MEADOW PORTAL (Looking into Barn) ---
+            portalOutside = new THREE.Group();
+            portalOutside.position.copy(posOutside);
 
-            const frameOutside = new THREE.Mesh(frameGeo, createToonMaterial(0x00f0ff));
-            attachOutline(frameOutside, 1.05);
-            portalOutsideFrame.add(frameOutside);
+            const frameO = new THREE.Mesh(frameGeo, frameMatBlue);
+            attachOutline(frameO, 1.05);
+            portalOutside.add(frameO);
 
-            scene.add(portalOutsideFrame);
+            portalOutsideScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ 
+                map: renderTargetBarn.texture, 
+                side: THREE.FrontSide 
+            }));
+            portalOutside.add(portalOutsideScreen);
+            scene.add(portalOutside);
         }
 
         function createTerrain() {
@@ -393,26 +397,44 @@
             setTimeout(() => { honkUI.style.opacity = '0'; }, 300);
         }
 
-        function updatePortalCamera() {
-            // Render Meadow view onto the Barn portal screen
-            portalCam.position.copy(posOutside);
-            portalCam.rotation.y = localGoose.rotation.y;
-            portalCam.rotation.x = pitchObject.rotation.x;
+        function updatePortalCameras() {
+            // Live view inside Barn Portal (Rendering Meadow destination)
+            portalCamToMeadow.position.copy(posOutside);
+            portalCamToMeadow.rotation.y = localGoose.rotation.y;
+            portalCamToMeadow.rotation.x = pitchObject.rotation.x;
 
             portalBarnScreen.visible = false;
-            renderer.setRenderTarget(renderTarget);
-            renderer.render(scene, portalCam);
-            renderer.setRenderTarget(null);
+            renderer.setRenderTarget(renderTargetMeadow);
+            renderer.render(scene, portalCamToMeadow);
             portalBarnScreen.visible = true;
+
+            // Live view inside Meadow Portal (Rendering Barn interior destination)
+            portalCamToBarn.position.copy(posBarn);
+            portalCamToBarn.rotation.y = localGoose.rotation.y;
+            portalCamToBarn.rotation.x = pitchObject.rotation.x;
+
+            portalOutsideScreen.visible = false;
+            renderer.setRenderTarget(renderTargetBarn);
+            renderer.render(scene, portalCamToBarn);
+            portalOutsideScreen.visible = true;
+
+            renderer.setRenderTarget(null);
         }
 
         function checkPortalTeleport() {
             if (!canTeleport) return;
 
-            // Teleport Barn -> Meadow upon stepping near the portal ring
-            if (localGoose.position.distanceTo(posBarnPortal) < 2.5) {
+            // Teleport Barn -> Outside Meadow
+            if (localGoose.position.distanceTo(posBarn) < 2.5) {
                 localGoose.position.copy(posOutside);
-                localGoose.position.z += 4.0; // Step safely clear of destination portal frame
+                localGoose.position.z += 3.5;
+                canTeleport = false;
+                setTimeout(() => canTeleport = true, 1000);
+            }
+            // Teleport Outside Meadow -> Inside Barn
+            else if (localGoose.position.distanceTo(posOutside) < 2.5) {
+                localGoose.position.copy(posBarn);
+                localGoose.position.z += 3.5;
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
@@ -457,7 +479,7 @@
                 });
             }
 
-            updatePortalCamera();
+            updatePortalCameras();
 
             renderer.render(scene, mainCamera);
         }
