@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Goose Meadow</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background-color: #87ceeb; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(255, 255, 255, 0.85); color: #2e7d32;
+            padding: 15px 20px; border: 3px solid #2e7d32; border-radius: 12px;
+            pointer-events: none;
+        }
+        #honk-text {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 80px; font-weight: 900; color: #ff5722;
+            text-shadow: 4px 4px 0px #fff, -4px -4px 0px #fff;
+            opacity: 0; transition: opacity 0.1s ease-in-out; pointer-events: none;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="hud">
+        <h1>🪿 Goose Squad</h1>
+        <p>Active Geese: <span id="geese-count">1</span></p>
+    </div>
+    <div id="honk-text">HONK!</div>
+
+    <script>
+        let scene, camera, renderer, socket;
+        let localGoose, localGooseHead;
+        let otherGeese = {};
+        let keys = {};
+        let toonGradientMap;
+        const terrainSize = 160;
+
+        function getHillHeight(x, z) {
+            return Math.sin(x * 0.05) * 2.5 + Math.cos(z * 0.05) * 2.5 + Math.sin((x + z) * 0.02) * 3;
+        }
+
+        function createToonMaterial(colorHex) {
+            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap });
+        }
+
+        function buildGooseMesh(accentColor = 0xff7b00) {
+            const group = new THREE.Group();
+            
+            // Body
+            const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
+            bodyGeo.scale(1, 0.8, 1.4);
+            const body = new THREE.Mesh(bodyGeo, createToonMaterial(0xffffff));
+            body.position.y = 1;
+            group.add(body);
+
+            // Neck & Head
+            const headGroup = new THREE.Group();
+            headGroup.position.set(0, 1.2, 0.8);
+
+            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 1.2, 8), createToonMaterial(0xffffff));
+            neck.position.set(0, 0.6, 0);
+            headGroup.add(neck);
+
+            // Beak
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.6, 8), createToonMaterial(accentColor));
+            beak.position.set(0, 1.1, 0.4);
+            beak.rotation.x = Math.PI / 2;
+            headGroup.add(beak);
+
+            group.add(headGroup);
+            return { group, headGroup };
+        }
+
+        function init() {
+            socket = io();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            scene.fog = new THREE.FogExp2(0x87ceeb, 0.008);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Toon Gradient
+            const canvas = document.createElement('canvas');
+            canvas.width = 4; canvas.height = 1;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#555'; ctx.fillRect(0, 0, 1, 1);
+            ctx.fillStyle = '#aaa'; ctx.fillRect(1, 0, 1, 1);
+            ctx.fillStyle = '#fff'; ctx.fillRect(2, 0, 2, 1);
+            toonGradientMap = new THREE.CanvasTexture(canvas);
+            toonGradientMap.minFilter = THREE.NearestFilter;
+            toonGradientMap.magFilter = THREE.NearestFilter;
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+            const dirLight = new THREE.DirectionalLight(0xfff5cc, 0.8);
+            dirLight.position.set(40, 60, 20);
+            scene.add(dirLight);
+
+            createTerrain();
+
+            // Local Player Spawn
+            const localMesh = buildGooseMesh(0xff5722);
+            localGoose = localMesh.group;
+            localGooseHead = localMesh.headGroup;
+            scene.add(localGoose);
+
+            // Network Events
+            socket.on('currentPlayers', (players) => {
+                Object.keys(players).forEach((id) => {
+                    if (id !== socket.id) addOtherPlayer(players[id]);
+                });
+                updatePlayerCount();
+            });
+
+            socket.on('newPlayer', (playerInfo) => {
+                addOtherPlayer(playerInfo);
+                updatePlayerCount();
+            });
+
+            socket.on('playerMoved', (playerInfo) => {
+                if (otherGeese[playerInfo.id]) {
+                    const g = otherGeese[playerInfo.id].group;
+                    g.position.x = playerInfo.x;
+                    g.position.z = playerInfo.z;
+                    g.position.y = getHillHeight(playerInfo.x, playerInfo.z);
+                    g.rotation.y = playerInfo.rotation;
+                }
+            });
+
+            socket.on('playerHonked', (id) => {
+                if (otherGeese[id]) {
+                    const h = otherGeese[id].headGroup;
+                    h.rotation.x = 0.5;
+                    setTimeout(() => { h.rotation.x = 0; }, 200);
+                }
+            });
+
+            socket.on('playerDisconnected', (id) => {
+                if (otherGeese[id]) {
+                    scene.remove(otherGeese[id].group);
+                    delete otherGeese[id];
+                    updatePlayerCount();
+                }
+            });
+
+            window.addEventListener('keydown', (e) => {
+                keys[e.code] = true;
+                if (e.code === 'Space') {
+                    honk();
+                    socket.emit('honk');
+                }
+            });
+            window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+            animate();
+        }
+
+        function createTerrain() {
+            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 64, 64);
+            floorGeo.rotateX(-Math.PI / 2);
+            const pos = floorGeo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
+            }
+            floorGeo.computeVertexNormals();
+            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(0x55a630)));
+        }
+
+        function addOtherPlayer(info) {
+            const gooseData = buildGooseMesh(info.color);
+            gooseData.group.position.set(info.x, getHillHeight(info.x, info.z), info.z);
+            scene.add(gooseData.group);
+            otherGeese[info.id] = gooseData;
+        }
+
+        function updatePlayerCount() {
+            document.getElementById('geese-count').innerText = Object.keys(otherGeese).length + 1;
+        }
+
+        function honk() {
+            const honkUI = document.getElementById('honk-text');
+            honkUI.style.opacity = '1';
+            setTimeout(() => { honkUI.style.opacity = '0'; }, 300);
+            localGooseHead.rotation.x = 0.5;
+            setTimeout(() => { localGooseHead.rotation.x = 0; }, 200);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            let moved = false;
+            const moveSpeed = 0.25;
+            const rotSpeed = 0.05;
+
+            if (keys['KeyW'] || keys['ArrowUp']) { localGoose.translateZ(-moveSpeed); moved = true; }
+            if (keys['KeyS'] || keys['ArrowDown']) { localGoose.translateZ(moveSpeed); moved = true; }
+            if (keys['KeyA'] || keys['ArrowLeft']) { localGoose.rotation.y += rotSpeed; moved = true; }
+            if (keys['KeyD'] || keys['ArrowRight']) { localGoose.rotation.y -= rotSpeed; moved = true; }
+
+            localGoose.position.y = getHillHeight(localGoose.position.x, localGoose.position.z);
+
+            if (moved) {
+                socket.emit('playerMovement', {
+                    x: localGoose.position.x,
+                    z: localGoose.position.z,
+                    rotation: localGoose.rotation.y
+                });
+            }
+
+            // Camera follow local player
+            const cameraOffset = new THREE.Vector3(0, 10, 16).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+            camera.position.copy(localGoose.position).add(cameraOffset);
+            camera.lookAt(localGoose.position.x, localGoose.position.y + 1.5, localGoose.position.z);
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
