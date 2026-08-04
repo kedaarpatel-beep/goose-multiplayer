@@ -86,8 +86,9 @@
         let portalCamToBarn, renderTargetBarn;
         let canTeleport = true;
 
-        const posOutside = new THREE.Vector3(0, 2.5, 15); // Outside Meadow Portal
-        const posBarn = new THREE.Vector3(60, 2.5, 60);    // Inside Barn Portal
+        // Portal Positions
+        const posOutside = new THREE.Vector3(0, 0, 15); // Outside Meadow Portal
+        const posBarn = new THREE.Vector3(60, 3.2, 60);    // Inside Barn Portal
 
         function getHillHeight(x, z) {
             if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
@@ -327,6 +328,9 @@
         }
 
         function setupTwoWayPortals() {
+            // Automatically elevate outside portal above local hill height
+            posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 3.2;
+
             renderTargetMeadow = new THREE.WebGLRenderTarget(1024, 1024);
             renderTargetBarn = new THREE.WebGLRenderTarget(1024, 1024);
 
@@ -338,7 +342,7 @@
             const frameMatBlue = createToonMaterial(0x00f0ff);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // --- 1. BARN PORTAL (Looking out to Meadow) ---
+            // --- 1. BARN PORTAL ---
             portalBarn = new THREE.Group();
             portalBarn.position.copy(posBarn);
 
@@ -353,7 +357,7 @@
             portalBarn.add(portalBarnScreen);
             scene.add(portalBarn);
 
-            // --- 2. MEADOW PORTAL (Looking into Barn) ---
+            // --- 2. OUTSIDE MEADOW PORTAL ---
             portalOutside = new THREE.Group();
             portalOutside.position.copy(posOutside);
 
@@ -426,15 +430,13 @@
 
             // Teleport Barn -> Outside Meadow
             if (localGoose.position.distanceTo(posBarn) < 2.5) {
-                localGoose.position.copy(posOutside);
-                localGoose.position.z += 3.5;
+                localGoose.position.set(posOutside.x, getHillHeight(posOutside.x, posOutside.z + 3.5), posOutside.z + 3.5);
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
             // Teleport Outside Meadow -> Inside Barn
             else if (localGoose.position.distanceTo(posOutside) < 2.5) {
-                localGoose.position.copy(posBarn);
-                localGoose.position.z += 3.5;
+                localGoose.position.set(posBarn.x, 0.1, posBarn.z + 3.5);
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
