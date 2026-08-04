@@ -5,19 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multiplayer Goose Meadow</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: 'Courier New', Courier, monospace; background-color: #87ceeb; }
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: 'Courier New', Courier, monospace; 
+            background-color: #70d6ff; 
+            user-select: none;
+        }
         #canvas-container { width: 100vw; height: 100vh; }
         #hud {
             position: absolute; top: 20px; left: 20px;
-            background: rgba(255, 255, 255, 0.85); color: #2e7d32;
-            padding: 15px 20px; border: 3px solid #2e7d32; border-radius: 12px;
+            background: rgba(255, 255, 255, 0.9); color: #1b4332;
+            padding: 15px 20px; border: 4px solid #1b4332; border-radius: 12px;
+            box-shadow: 0 6px 0px #1b4332;
             pointer-events: none;
         }
+        #hud h1 { margin: 0 0 5px 0; font-size: 20px; text-transform: uppercase; }
+        #hud p { margin: 3px 0; font-size: 14px; font-weight: bold; }
         #honk-text {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 80px; font-weight: 900; color: #ff5722;
-            text-shadow: 4px 4px 0px #fff, -4px -4px 0px #fff;
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 90px; font-weight: 900; color: #ff477e;
+            text-shadow: 5px 5px 0px #000, -5px -5px 0px #000, 5px -5px 0px #000, -5px 5px 0px #000;
             opacity: 0; transition: opacity 0.1s ease-in-out; pointer-events: none;
+        }
+        #controls {
+            position: absolute; bottom: 20px; left: 20px;
+            background: rgba(255, 255, 255, 0.9); color: #000;
+            padding: 10px 15px; border-radius: 8px; font-size: 12px;
+            border: 3px solid #1b4332; font-weight: bold;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -31,6 +46,10 @@
         <p>Active Geese: <span id="geese-count">1</span></p>
     </div>
     <div id="honk-text">HONK!</div>
+    <div id="controls">
+        [W, A, S, D] / Arrows : Move<br>
+        [SPACE] : HONK!
+    </div>
 
     <script>
         let scene, camera, renderer, socket;
@@ -38,39 +57,68 @@
         let otherGeese = {};
         let keys = {};
         let toonGradientMap;
-        const terrainSize = 160;
+        const terrainSize = 180;
 
+        // --- MUCH MORE HILLY TERRAIN FUNCTION ---
         function getHillHeight(x, z) {
-            return Math.sin(x * 0.05) * 2.5 + Math.cos(z * 0.05) * 2.5 + Math.sin((x + z) * 0.02) * 3;
+            const h1 = Math.sin(x * 0.08) * 5.0 + Math.cos(z * 0.08) * 5.0;
+            const h2 = Math.sin((x + z) * 0.04) * 6.0;
+            const h3 = Math.cos(x * 0.15) * 2.0;
+            return h1 + h2 + h3;
         }
 
         function createToonMaterial(colorHex) {
             return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap });
         }
 
+        // --- HELPER TO ADD BLACK TOON OUTLINES ---
+        function attachOutline(mesh, outlineScale = 1.08) {
+            const outlineMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+            const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
+            outlineMesh.scale.set(outlineScale, outlineScale, outlineScale);
+            mesh.add(outlineMesh);
+        }
+
+        // --- GOOSE MESH BUILDER (HEAD AT THE FRONT) ---
         function buildGooseMesh(accentColor = 0xff7b00) {
             const group = new THREE.Group();
             
             // Body
             const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
-            bodyGeo.scale(1, 0.8, 1.4);
+            bodyGeo.scale(1, 0.85, 1.4);
             const body = new THREE.Mesh(bodyGeo, createToonMaterial(0xffffff));
             body.position.y = 1;
+            attachOutline(body, 1.08);
             group.add(body);
 
-            // Neck & Head
+            // Neck & Head (Shifted to -0.8 Z so it's on the FRONT)
             const headGroup = new THREE.Group();
-            headGroup.position.set(0, 1.2, 0.8);
+            headGroup.position.set(0, 1.1, -0.8);
 
-            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 1.2, 8), createToonMaterial(0xffffff));
-            neck.position.set(0, 0.6, 0);
+            const neckGeo = new THREE.CylinderGeometry(0.2, 0.35, 1.3, 8);
+            const neck = new THREE.Mesh(neckGeo, createToonMaterial(0xffffff));
+            neck.position.set(0, 0.65, 0);
+            neck.rotation.x = -0.25; // Lean forward
+            attachOutline(neck, 1.12);
             headGroup.add(neck);
 
-            // Beak
-            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.6, 8), createToonMaterial(accentColor));
-            beak.position.set(0, 1.1, 0.4);
-            beak.rotation.x = Math.PI / 2;
+            // Beak (Facing Forward -Z)
+            const beakGeo = new THREE.ConeGeometry(0.2, 0.7, 8);
+            const beak = new THREE.Mesh(beakGeo, createToonMaterial(accentColor));
+            beak.position.set(0, 1.1, -0.45);
+            beak.rotation.x = -Math.PI / 2;
+            attachOutline(beak, 1.15);
             headGroup.add(beak);
+
+            // Eyes
+            const eyeGeo = new THREE.SphereGeometry(0.08, 8, 8);
+            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+            leftEye.position.set(0.18, 1.25, -0.25);
+            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
+            rightEye.position.set(-0.18, 1.25, -0.25);
+            headGroup.add(leftEye);
+            headGroup.add(rightEye);
 
             group.add(headGroup);
             return { group, headGroup };
@@ -80,31 +128,32 @@
             socket = io();
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87ceeb);
-            scene.fog = new THREE.FogExp2(0x87ceeb, 0.008);
+            scene.background = new THREE.Color(0x70d6ff);
+            scene.fog = new THREE.FogExp2(0x70d6ff, 0.006);
 
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-            // Toon Gradient
+            // 3-Step Toon Gradient
             const canvas = document.createElement('canvas');
             canvas.width = 4; canvas.height = 1;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#555'; ctx.fillRect(0, 0, 1, 1);
-            ctx.fillStyle = '#aaa'; ctx.fillRect(1, 0, 1, 1);
+            ctx.fillStyle = '#333'; ctx.fillRect(0, 0, 1, 1);
+            ctx.fillStyle = '#888'; ctx.fillRect(1, 0, 1, 1);
             ctx.fillStyle = '#fff'; ctx.fillRect(2, 0, 2, 1);
             toonGradientMap = new THREE.CanvasTexture(canvas);
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.75));
-            const dirLight = new THREE.DirectionalLight(0xfff5cc, 0.8);
-            dirLight.position.set(40, 60, 20);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+            const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
+            dirLight.position.set(50, 80, 30);
             scene.add(dirLight);
 
             createTerrain();
+            spawnToonProps();
 
             // Local Player Spawn
             const localMesh = buildGooseMesh(0xff5722);
@@ -138,7 +187,7 @@
             socket.on('playerHonked', (id) => {
                 if (otherGeese[id]) {
                     const h = otherGeese[id].headGroup;
-                    h.rotation.x = 0.5;
+                    h.rotation.x = -0.4;
                     setTimeout(() => { h.rotation.x = 0; }, 200);
                 }
             });
@@ -164,14 +213,41 @@
         }
 
         function createTerrain() {
-            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 64, 64);
+            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 96, 96);
             floorGeo.rotateX(-Math.PI / 2);
             const pos = floorGeo.attributes.position;
             for (let i = 0; i < pos.count; i++) {
                 pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             }
             floorGeo.computeVertexNormals();
-            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(0x55a630)));
+            
+            const floor = new THREE.Mesh(floorGeo, createToonMaterial(0x38b000));
+            scene.add(floor);
+        }
+
+        function spawnToonProps() {
+            for (let i = 0; i < 40; i++) {
+                const px = (Math.random() - 0.5) * (terrainSize - 30);
+                const pz = (Math.random() - 0.5) * (terrainSize - 30);
+                if (Math.hypot(px, pz) < 12) continue;
+
+                const py = getHillHeight(px, pz);
+
+                // Spawning Toon Trees
+                const tree = new THREE.Group();
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3.5, 8), createToonMaterial(0x7f5539));
+                trunk.position.y = 1.75;
+                attachOutline(trunk, 1.1);
+                tree.add(trunk);
+
+                const foliage = new THREE.Mesh(new THREE.DodecahedronGeometry(2.5, 1), createToonMaterial(0x007200));
+                foliage.position.y = 4.5;
+                attachOutline(foliage, 1.1);
+                tree.add(foliage);
+
+                tree.position.set(px, py, pz);
+                scene.add(tree);
+            }
         }
 
         function addOtherPlayer(info) {
@@ -189,7 +265,8 @@
             const honkUI = document.getElementById('honk-text');
             honkUI.style.opacity = '1';
             setTimeout(() => { honkUI.style.opacity = '0'; }, 300);
-            localGooseHead.rotation.x = 0.5;
+            
+            localGooseHead.rotation.x = -0.4;
             setTimeout(() => { localGooseHead.rotation.x = 0; }, 200);
         }
 
@@ -197,7 +274,7 @@
             requestAnimationFrame(animate);
 
             let moved = false;
-            const moveSpeed = 0.25;
+            const moveSpeed = 0.28;
             const rotSpeed = 0.05;
 
             if (keys['KeyW'] || keys['ArrowUp']) { localGoose.translateZ(-moveSpeed); moved = true; }
@@ -215,8 +292,8 @@
                 });
             }
 
-            // Camera follow local player
-            const cameraOffset = new THREE.Vector3(0, 10, 16).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+            // Camera Follows Goose
+            const cameraOffset = new THREE.Vector3(0, 11, 16).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
             camera.position.copy(localGoose.position).add(cameraOffset);
             camera.lookAt(localGoose.position.x, localGoose.position.y + 1.5, localGoose.position.z);
 
