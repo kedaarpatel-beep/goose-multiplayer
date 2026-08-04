@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer Goose Portal Meadow</title>
+    <title>Multiplayer Goose First-Person Portals</title>
     <style>
         body { 
             margin: 0; 
@@ -34,6 +34,15 @@
             padding: 10px 15px; border-radius: 8px; font-size: 12px;
             border: 3px solid #1b4332; font-weight: bold;
         }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 8px; height: 8px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px solid #000;
+            border-radius: 50%;
+            pointer-events: none;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
@@ -41,45 +50,50 @@
 <body>
 
     <div id="canvas-container"></div>
+    <div id="crosshair"></div>
     <div id="hud">
-        <h1>🪿 Goose Squad</h1>
+        <h1>🪿 First-Person Goose</h1>
         <p>Active Geese: <span id="geese-count">1</span></p>
     </div>
     <div id="honk-text">HONK!</div>
     <div id="controls">
-        [W, A, S, D] / Arrows : Move<br>
+        [W, A, S, D] / Arrows : Walk<br>
         [SPACE] : HONK!<br>
-        <i>Walk into the glowing portal!</i>
+        Walk through the portal to enter the barn!
     </div>
 
     <script>
         let scene, mainCamera, renderer, socket;
-        let localGoose, localGooseHead;
+        let localGoose, localGooseHead, beakMesh;
         let otherGeese = {};
         let keys = {};
         let toonGradientMap;
         const terrainSize = 180;
 
         // --- PORTAL SYSTEM VARIABLES ---
-        let portalA, portalB; // Entrance & Exit Meshes
-        let portalCamA, portalCamB; // Cameras rendering portal views
+        let portalA, portalB; 
+        let portalCamA, portalCamB; 
         let renderTargetA, renderTargetB;
         let canTeleport = true;
 
-        // Positions: Portal A in Meadow, Portal B inside Barn
+        // Portal A in Meadow, Portal B inside Hollow Barn
         const posA = new THREE.Vector3(0, 0, 15);
         const posB = new THREE.Vector3(60, 1.5, 60);
 
         function getHillHeight(x, z) {
-            // Keep barn/portal area flat to avoid floor clipping
-            if (Math.hypot(x - 60, z - 60) < 25) return 0; 
+            // Keep barn interior and portal areas perfectly flat
+            if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
             const h1 = Math.sin(x * 0.08) * 5.0 + Math.cos(z * 0.08) * 5.0;
             const h2 = Math.sin((x + z) * 0.04) * 6.0;
             return h1 + h2;
         }
 
-        function createToonMaterial(colorHex) {
-            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap });
+        function createToonMaterial(colorHex, side = THREE.FrontSide) {
+            return new THREE.MeshToonMaterial({ 
+                color: colorHex, 
+                gradientMap: toonGradientMap,
+                side: side 
+            });
         }
 
         function attachOutline(mesh, outlineScale = 1.08) {
@@ -89,7 +103,7 @@
             mesh.add(outlineMesh);
         }
 
-        function buildGooseMesh(accentColor = 0xff7b00) {
+        function buildGooseMesh(accentColor = 0xff7b00, isLocal = false) {
             const group = new THREE.Group();
             
             // Body
@@ -120,7 +134,14 @@
             headGroup.add(beak);
 
             group.add(headGroup);
-            return { group, headGroup };
+
+            // Hide body for local first-person player so it doesn't block vision
+            if (isLocal) {
+                body.visible = false;
+                neck.visible = false;
+            }
+
+            return { group, headGroup, beak };
         }
 
         function init() {
@@ -130,7 +151,7 @@
             scene.background = new THREE.Color(0x70d6ff);
             scene.fog = new THREE.FogExp2(0x70d6ff, 0.005);
 
-            mainCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -153,14 +174,19 @@
             scene.add(dirLight);
 
             createTerrain();
-            createBarn();
+            createHollowBarn();
             setupPortals();
 
-            // Local Player
-            const localMesh = buildGooseMesh(0xff5722);
+            // Local First-Person Player
+            const localMesh = buildGooseMesh(0xff5722, true);
             localGoose = localMesh.group;
             localGooseHead = localMesh.headGroup;
+            beakMesh = localMesh.beak;
             scene.add(localGoose);
+
+            // Attach camera inside goose head for First-Person
+            localGooseHead.add(mainCamera);
+            mainCamera.position.set(0, 1.25, -0.3);
 
             // Network Handlers
             socket.on('currentPlayers', (players) => {
@@ -213,55 +239,84 @@
             animate();
         }
 
-        // --- BARN BUILDER ---
-        function createBarn() {
+        // --- HOLLOW BARN WITH INTERIOR ---
+        function createHollowBarn() {
             const barn = new THREE.Group();
             barn.position.set(60, 0, 60);
 
-            // Red Barn Body
-            const wallsGeo = new THREE.BoxGeometry(16, 10, 20);
-            const walls = new THREE.Mesh(wallsGeo, createToonMaterial(0xcc2222));
-            walls.position.y = 5;
-            attachOutline(walls, 1.03);
-            barn.add(walls);
+            const redMat = createToonMaterial(0xcc2222, THREE.DoubleSide);
+            const woodMat = createToonMaterial(0x8b5a2b, THREE.DoubleSide);
+            const darkRoofMat = createToonMaterial(0x3a1e05, THREE.DoubleSide);
 
-            // Roof
-            const roofGeo = new THREE.ConeGeometry(13, 6, 4);
-            const roof = new THREE.Mesh(roofGeo, createToonMaterial(0x442211));
-            roof.position.y = 13;
-            roof.rotation.y = Math.PI / 4;
-            attachOutline(roof, 1.03);
-            barn.add(roof);
+            // Barn Floor inside
+            const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(18, 22), woodMat);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.position.y = 0.1;
+            barn.add(floorMesh);
 
-            // Doorway Hole (Cutout visualization)
-            const doorGeo = new THREE.PlaneGeometry(5, 7);
-            const doorMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-            const door = new THREE.Mesh(doorGeo, doorMat);
-            door.position.set(0, 3.5, -10.01);
-            door.rotation.y = Math.PI;
-            barn.add(door);
+            // Left & Right Outer Walls
+            const sideWallGeo = new THREE.BoxGeometry(0.6, 9, 22);
+            const leftWall = new THREE.Mesh(sideWallGeo, redMat);
+            leftWall.position.set(-9, 4.5, 0);
+            attachOutline(leftWall, 1.02);
+            barn.add(leftWall);
+
+            const rightWall = new THREE.Mesh(sideWallGeo, redMat);
+            rightWall.position.set(9, 4.5, 0);
+            attachOutline(rightWall, 1.02);
+            barn.add(rightWall);
+
+            // Back Wall
+            const backWallGeo = new THREE.BoxGeometry(18, 9, 0.6);
+            const backWall = new THREE.Mesh(backWallGeo, redMat);
+            backWall.position.set(0, 4.5, 11);
+            attachOutline(backWall, 1.02);
+            barn.add(backWall);
+
+            // Front Walls with Open Doorway in Center
+            const frontWallGeo = new THREE.BoxGeometry(6, 9, 0.6);
+            const frontLeft = new THREE.Mesh(frontWallGeo, redMat);
+            frontLeft.position.set(-6, 4.5, -11);
+            attachOutline(frontLeft, 1.02);
+            barn.add(frontLeft);
+
+            const frontRight = new THREE.Mesh(frontWallGeo, redMat);
+            frontRight.position.set(6, 4.5, -11);
+            attachOutline(frontRight, 1.02);
+            barn.add(frontRight);
+
+            // Roof (Pitched Slants)
+            const roofGeo = new THREE.BoxGeometry(11, 0.5, 23);
+            const leftRoof = new THREE.Mesh(roofGeo, darkRoofMat);
+            leftRoof.position.set(-4.5, 11, 0);
+            leftRoof.rotation.z = 0.35;
+            attachOutline(leftRoof, 1.02);
+            barn.add(leftRoof);
+
+            const rightRoof = new THREE.Mesh(roofGeo, darkRoofMat);
+            rightRoof.position.set(4.5, 11, 0);
+            rightRoof.rotation.z = -0.35;
+            attachOutline(rightRoof, 1.02);
+            barn.add(rightRoof);
 
             scene.add(barn);
         }
 
-        // --- SEAMLESS LIVE PORTAL SETUP ---
+        // --- SEAMLESS LIVE PORTALS ---
         function setupPortals() {
             posA.y = getHillHeight(posA.x, posA.z) + 3;
 
             renderTargetA = new THREE.WebGLRenderTarget(1024, 1024);
             renderTargetB = new THREE.WebGLRenderTarget(1024, 1024);
 
-            portalCamA = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
-            portalCamB = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+            portalCamA = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
+            portalCamB = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 
-            // Frame Geometry
             const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
             const frameMat = createToonMaterial(0xff0077);
-
-            // Portal Screen Geometry
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // PORTAL A (In the Meadow)
+            // PORTAL A (Meadow)
             portalA = new THREE.Group();
             portalA.position.copy(posA);
 
@@ -298,7 +353,7 @@
         }
 
         function addOtherPlayer(info) {
-            const gooseData = buildGooseMesh(info.color);
+            const gooseData = buildGooseMesh(info.color, false);
             gooseData.group.position.set(info.x, getHillHeight(info.x, info.z), info.z);
             scene.add(gooseData.group);
             otherGeese[info.id] = gooseData;
@@ -318,17 +373,21 @@
         }
 
         function updatePortals() {
-            // Update camera view for Portal A (Looking out of Portal B inside Barn)
-            portalCamA.position.copy(posB);
-            portalCamA.rotation.copy(mainCamera.rotation);
+            // Compute First-Person Camera Matrix for Portal A -> B
+            const playerRelA = localGoose.position.clone().sub(posA);
+            portalCamA.position.copy(posB).add(playerRelA);
+            portalCamA.rotation.copy(localGoose.rotation);
+
             portalA.visible = false;
             renderer.setRenderTarget(renderTargetA);
             renderer.render(scene, portalCamA);
             portalA.visible = true;
 
-            // Update camera view for Portal B (Looking out of Portal A in Meadow)
-            portalCamB.position.copy(posA);
-            portalCamB.rotation.copy(mainCamera.rotation);
+            // Compute First-Person Camera Matrix for Portal B -> A
+            const playerRelB = localGoose.position.clone().sub(posB);
+            portalCamB.position.copy(posA).add(playerRelB);
+            portalCamB.rotation.copy(localGoose.rotation);
+
             portalB.visible = false;
             renderer.setRenderTarget(renderTargetB);
             renderer.render(scene, portalCamB);
@@ -340,17 +399,17 @@
         function checkPortalTeleport() {
             if (!canTeleport) return;
 
-            // Teleport A -> B
+            // Teleport Meadow -> Barn
             if (localGoose.position.distanceTo(posA) < 2.5) {
                 localGoose.position.copy(posB);
-                localGoose.position.z += 3; // Step out of portal frame
+                localGoose.position.z += 3.5;
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             } 
-            // Teleport B -> A
+            // Teleport Barn -> Meadow
             else if (localGoose.position.distanceTo(posB) < 2.5) {
                 localGoose.position.copy(posA);
-                localGoose.position.z += 3;
+                localGoose.position.z += 3.5;
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
@@ -380,12 +439,7 @@
                 });
             }
 
-            // Camera follow
-            const cameraOffset = new THREE.Vector3(0, 11, 16).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
-            mainCamera.position.copy(localGoose.position).add(cameraOffset);
-            mainCamera.lookAt(localGoose.position.x, localGoose.position.y + 1.5, localGoose.position.z);
-
-            // Render live portal views before main frame render
+            // Sync First-Person Portal Camera Feeds
             updatePortals();
 
             renderer.render(scene, mainCamera);
