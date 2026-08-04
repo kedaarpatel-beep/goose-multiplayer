@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer Goose Meadow</title>
+    <title>Multiplayer Goose Portal Meadow</title>
     <style>
         body { 
             margin: 0; 
@@ -48,30 +48,40 @@
     <div id="honk-text">HONK!</div>
     <div id="controls">
         [W, A, S, D] / Arrows : Move<br>
-        [SPACE] : HONK!
+        [SPACE] : HONK!<br>
+        <i>Walk into the glowing portal!</i>
     </div>
 
     <script>
-        let scene, camera, renderer, socket;
+        let scene, mainCamera, renderer, socket;
         let localGoose, localGooseHead;
         let otherGeese = {};
         let keys = {};
         let toonGradientMap;
         const terrainSize = 180;
 
-        // --- MUCH MORE HILLY TERRAIN FUNCTION ---
+        // --- PORTAL SYSTEM VARIABLES ---
+        let portalA, portalB; // Entrance & Exit Meshes
+        let portalCamA, portalCamB; // Cameras rendering portal views
+        let renderTargetA, renderTargetB;
+        let canTeleport = true;
+
+        // Positions: Portal A in Meadow, Portal B inside Barn
+        const posA = new THREE.Vector3(0, 0, 15);
+        const posB = new THREE.Vector3(60, 1.5, 60);
+
         function getHillHeight(x, z) {
+            // Keep barn/portal area flat to avoid floor clipping
+            if (Math.hypot(x - 60, z - 60) < 25) return 0; 
             const h1 = Math.sin(x * 0.08) * 5.0 + Math.cos(z * 0.08) * 5.0;
             const h2 = Math.sin((x + z) * 0.04) * 6.0;
-            const h3 = Math.cos(x * 0.15) * 2.0;
-            return h1 + h2 + h3;
+            return h1 + h2;
         }
 
         function createToonMaterial(colorHex) {
             return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap });
         }
 
-        // --- HELPER TO ADD BLACK TOON OUTLINES ---
         function attachOutline(mesh, outlineScale = 1.08) {
             const outlineMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
             const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
@@ -79,7 +89,6 @@
             mesh.add(outlineMesh);
         }
 
-        // --- GOOSE MESH BUILDER (HEAD AT THE FRONT) ---
         function buildGooseMesh(accentColor = 0xff7b00) {
             const group = new THREE.Group();
             
@@ -91,34 +100,24 @@
             attachOutline(body, 1.08);
             group.add(body);
 
-            // Neck & Head (Shifted to -0.8 Z so it's on the FRONT)
+            // Neck & Head
             const headGroup = new THREE.Group();
             headGroup.position.set(0, 1.1, -0.8);
 
             const neckGeo = new THREE.CylinderGeometry(0.2, 0.35, 1.3, 8);
             const neck = new THREE.Mesh(neckGeo, createToonMaterial(0xffffff));
             neck.position.set(0, 0.65, 0);
-            neck.rotation.x = -0.25; // Lean forward
+            neck.rotation.x = -0.25;
             attachOutline(neck, 1.12);
             headGroup.add(neck);
 
-            // Beak (Facing Forward -Z)
+            // Beak
             const beakGeo = new THREE.ConeGeometry(0.2, 0.7, 8);
             const beak = new THREE.Mesh(beakGeo, createToonMaterial(accentColor));
             beak.position.set(0, 1.1, -0.45);
             beak.rotation.x = -Math.PI / 2;
             attachOutline(beak, 1.15);
             headGroup.add(beak);
-
-            // Eyes
-            const eyeGeo = new THREE.SphereGeometry(0.08, 8, 8);
-            const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-            const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-            leftEye.position.set(0.18, 1.25, -0.25);
-            const rightEye = new THREE.Mesh(eyeGeo, eyeMat);
-            rightEye.position.set(-0.18, 1.25, -0.25);
-            headGroup.add(leftEye);
-            headGroup.add(rightEye);
 
             group.add(headGroup);
             return { group, headGroup };
@@ -129,14 +128,15 @@
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x70d6ff);
-            scene.fog = new THREE.FogExp2(0x70d6ff, 0.006);
+            scene.fog = new THREE.FogExp2(0x70d6ff, 0.005);
 
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            mainCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-            // 3-Step Toon Gradient
+            // Toon Texture
             const canvas = document.createElement('canvas');
             canvas.width = 4; canvas.height = 1;
             const ctx = canvas.getContext('2d');
@@ -153,15 +153,16 @@
             scene.add(dirLight);
 
             createTerrain();
-            spawnToonProps();
+            createBarn();
+            setupPortals();
 
-            // Local Player Spawn
+            // Local Player
             const localMesh = buildGooseMesh(0xff5722);
             localGoose = localMesh.group;
             localGooseHead = localMesh.headGroup;
             scene.add(localGoose);
 
-            // Network Events
+            // Network Handlers
             socket.on('currentPlayers', (players) => {
                 Object.keys(players).forEach((id) => {
                     if (id !== socket.id) addOtherPlayer(players[id]);
@@ -212,6 +213,79 @@
             animate();
         }
 
+        // --- BARN BUILDER ---
+        function createBarn() {
+            const barn = new THREE.Group();
+            barn.position.set(60, 0, 60);
+
+            // Red Barn Body
+            const wallsGeo = new THREE.BoxGeometry(16, 10, 20);
+            const walls = new THREE.Mesh(wallsGeo, createToonMaterial(0xcc2222));
+            walls.position.y = 5;
+            attachOutline(walls, 1.03);
+            barn.add(walls);
+
+            // Roof
+            const roofGeo = new THREE.ConeGeometry(13, 6, 4);
+            const roof = new THREE.Mesh(roofGeo, createToonMaterial(0x442211));
+            roof.position.y = 13;
+            roof.rotation.y = Math.PI / 4;
+            attachOutline(roof, 1.03);
+            barn.add(roof);
+
+            // Doorway Hole (Cutout visualization)
+            const doorGeo = new THREE.PlaneGeometry(5, 7);
+            const doorMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+            const door = new THREE.Mesh(doorGeo, doorMat);
+            door.position.set(0, 3.5, -10.01);
+            door.rotation.y = Math.PI;
+            barn.add(door);
+
+            scene.add(barn);
+        }
+
+        // --- SEAMLESS LIVE PORTAL SETUP ---
+        function setupPortals() {
+            posA.y = getHillHeight(posA.x, posA.z) + 3;
+
+            renderTargetA = new THREE.WebGLRenderTarget(1024, 1024);
+            renderTargetB = new THREE.WebGLRenderTarget(1024, 1024);
+
+            portalCamA = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+            portalCamB = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+
+            // Frame Geometry
+            const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
+            const frameMat = createToonMaterial(0xff0077);
+
+            // Portal Screen Geometry
+            const screenGeo = new THREE.CircleGeometry(2.8, 32);
+
+            // PORTAL A (In the Meadow)
+            portalA = new THREE.Group();
+            portalA.position.copy(posA);
+
+            const frameA = new THREE.Mesh(frameGeo, frameMat);
+            attachOutline(frameA, 1.05);
+            portalA.add(frameA);
+
+            const screenA = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetB.texture }));
+            portalA.add(screenA);
+            scene.add(portalA);
+
+            // PORTAL B (Inside Barn)
+            portalB = new THREE.Group();
+            portalB.position.copy(posB);
+
+            const frameB = new THREE.Mesh(frameGeo, frameMat);
+            attachOutline(frameB, 1.05);
+            portalB.add(frameB);
+
+            const screenB = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetA.texture }));
+            portalB.add(screenB);
+            scene.add(portalB);
+        }
+
         function createTerrain() {
             const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 96, 96);
             floorGeo.rotateX(-Math.PI / 2);
@@ -220,34 +294,7 @@
                 pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             }
             floorGeo.computeVertexNormals();
-            
-            const floor = new THREE.Mesh(floorGeo, createToonMaterial(0x38b000));
-            scene.add(floor);
-        }
-
-        function spawnToonProps() {
-            for (let i = 0; i < 40; i++) {
-                const px = (Math.random() - 0.5) * (terrainSize - 30);
-                const pz = (Math.random() - 0.5) * (terrainSize - 30);
-                if (Math.hypot(px, pz) < 12) continue;
-
-                const py = getHillHeight(px, pz);
-
-                // Spawning Toon Trees
-                const tree = new THREE.Group();
-                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 3.5, 8), createToonMaterial(0x7f5539));
-                trunk.position.y = 1.75;
-                attachOutline(trunk, 1.1);
-                tree.add(trunk);
-
-                const foliage = new THREE.Mesh(new THREE.DodecahedronGeometry(2.5, 1), createToonMaterial(0x007200));
-                foliage.position.y = 4.5;
-                attachOutline(foliage, 1.1);
-                tree.add(foliage);
-
-                tree.position.set(px, py, pz);
-                scene.add(tree);
-            }
+            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(0x38b000)));
         }
 
         function addOtherPlayer(info) {
@@ -270,6 +317,45 @@
             setTimeout(() => { localGooseHead.rotation.x = 0; }, 200);
         }
 
+        function updatePortals() {
+            // Update camera view for Portal A (Looking out of Portal B inside Barn)
+            portalCamA.position.copy(posB);
+            portalCamA.rotation.copy(mainCamera.rotation);
+            portalA.visible = false;
+            renderer.setRenderTarget(renderTargetA);
+            renderer.render(scene, portalCamA);
+            portalA.visible = true;
+
+            // Update camera view for Portal B (Looking out of Portal A in Meadow)
+            portalCamB.position.copy(posA);
+            portalCamB.rotation.copy(mainCamera.rotation);
+            portalB.visible = false;
+            renderer.setRenderTarget(renderTargetB);
+            renderer.render(scene, portalCamB);
+            portalB.visible = true;
+
+            renderer.setRenderTarget(null);
+        }
+
+        function checkPortalTeleport() {
+            if (!canTeleport) return;
+
+            // Teleport A -> B
+            if (localGoose.position.distanceTo(posA) < 2.5) {
+                localGoose.position.copy(posB);
+                localGoose.position.z += 3; // Step out of portal frame
+                canTeleport = false;
+                setTimeout(() => canTeleport = true, 1000);
+            } 
+            // Teleport B -> A
+            else if (localGoose.position.distanceTo(posB) < 2.5) {
+                localGoose.position.copy(posA);
+                localGoose.position.z += 3;
+                canTeleport = false;
+                setTimeout(() => canTeleport = true, 1000);
+            }
+        }
+
         function animate() {
             requestAnimationFrame(animate);
 
@@ -284,6 +370,8 @@
 
             localGoose.position.y = getHillHeight(localGoose.position.x, localGoose.position.z);
 
+            checkPortalTeleport();
+
             if (moved) {
                 socket.emit('playerMovement', {
                     x: localGoose.position.x,
@@ -292,12 +380,15 @@
                 });
             }
 
-            // Camera Follows Goose
+            // Camera follow
             const cameraOffset = new THREE.Vector3(0, 11, 16).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
-            camera.position.copy(localGoose.position).add(cameraOffset);
-            camera.lookAt(localGoose.position.x, localGoose.position.y + 1.5, localGoose.position.z);
+            mainCamera.position.copy(localGoose.position).add(cameraOffset);
+            mainCamera.lookAt(localGoose.position.x, localGoose.position.y + 1.5, localGoose.position.z);
 
-            renderer.render(scene, camera);
+            // Render live portal views before main frame render
+            updatePortals();
+
+            renderer.render(scene, mainCamera);
         }
 
         window.onload = init;
