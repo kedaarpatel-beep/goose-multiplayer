@@ -13,15 +13,41 @@
             user-select: none;
         }
         #canvas-container { width: 100vw; height: 100vh; cursor: pointer; }
+        
+        /* Nickname Overlay Screen */
+        #login-screen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(112, 214, 255, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100;
+        }
+        #login-box {
+            background: #ffffff; border: 4px solid #1b4332; border-radius: 16px;
+            padding: 30px 40px; text-align: center; box-shadow: 0 10px 0 #1b4332;
+        }
+        #login-box h1 { margin-top: 0; color: #1b4332; font-size: 28px; }
+        #nickname-input {
+            width: 80%; padding: 12px; font-size: 16px; font-family: inherit;
+            border: 3px solid #1b4332; border-radius: 8px; margin-bottom: 20px;
+            text-align: center; font-weight: bold; outline: none;
+        }
+        #play-btn {
+            background: #ff477e; color: #ffffff; font-size: 18px; font-weight: bold;
+            padding: 12px 28px; border: 3px solid #000; border-radius: 8px;
+            cursor: pointer; box-shadow: 0 4px 0 #000; transition: transform 0.1s;
+        }
+        #play-btn:active { transform: translateY(4px); box-shadow: none; }
+
+        /* HUD & Controls */
         #hud {
             position: absolute; top: 20px; left: 20px;
             background: rgba(255, 255, 255, 0.9); color: #1b4332;
             padding: 15px 20px; border: 4px solid #1b4332; border-radius: 12px;
-            box-shadow: 0 6px 0px #1b4332;
-            pointer-events: none;
+            box-shadow: 0 6px 0px #1b4332; pointer-events: none;
         }
         #hud h1 { margin: 0 0 5px 0; font-size: 20px; text-transform: uppercase; }
         #hud p { margin: 3px 0; font-size: 14px; font-weight: bold; }
+        
         #honk-text {
             position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
             font-size: 90px; font-weight: 900; color: #ff477e;
@@ -32,23 +58,45 @@
             position: absolute; bottom: 20px; left: 20px;
             background: rgba(255, 255, 255, 0.9); color: #000;
             padding: 10px 15px; border-radius: 8px; font-size: 12px;
-            border: 3px solid #1b4332; font-weight: bold;
-            pointer-events: none;
+            border: 3px solid #1b4332; font-weight: bold; pointer-events: none;
         }
         #crosshair {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 6px; height: 6px;
-            background: #ffffff;
-            border: 2px solid #000000;
-            border-radius: 50%;
-            pointer-events: none;
+            width: 6px; height: 6px; background: #ffffff;
+            border: 2px solid #000000; border-radius: 50%; pointer-events: none;
+        }
+
+        /* Chat Overlay */
+        #chat-container {
+            position: absolute; bottom: 20px; right: 20px; width: 320px;
+            background: rgba(255, 255, 255, 0.9); border: 3px solid #1b4332;
+            border-radius: 10px; padding: 10px; box-shadow: 0 4px 0 #1b4332;
+            display: flex; flex-direction: column; z-index: 10;
+        }
+        #chat-messages {
+            height: 140px; overflow-y: auto; font-size: 13px; font-weight: bold;
+            margin-bottom: 8px; color: #1b4332; word-wrap: break-word;
+        }
+        #chat-messages p { margin: 4px 0; }
+        #chat-input {
+            width: 90%; padding: 8px; font-family: inherit; font-size: 12px;
+            border: 2px solid #1b4332; border-radius: 6px; outline: none;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
+
+    <div id="login-screen">
+        <div id="login-box">
+            <h1>🪿 JOIN THE SQUAD</h1>
+            <input type="text" id="nickname-input" placeholder="Enter Goose Name..." maxlength="12" />
+            <br>
+            <button id="play-btn" onclick="joinGame()">HONK & PLAY!</button>
+        </div>
+    </div>
 
     <div id="canvas-container"></div>
     <div id="crosshair"></div>
@@ -61,7 +109,13 @@
         <b>CLICK SCREEN TO LOCK MOUSE</b><br>
         [W, A, S, D] : Walk<br>
         [SPACE] : Jump<br>
-        [LEFT CLICK / E] : HONK!
+        [E / LEFT CLICK] : HONK!<br>
+        [T / ENTER] : Open Chat
+    </div>
+
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <input type="text" id="chat-input" placeholder="Press T to chat..." maxlength="60" />
     </div>
 
     <script>
@@ -71,24 +125,24 @@
         let keys = {};
         let toonGradientMap;
         const terrainSize = 180;
+        let playerNickname = "Goose";
 
-        // FPS Movement & Physics
+        // FPS Physics
         let isPointerLocked = false;
         let velocityY = 0;
         let isGrounded = true;
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        // Two-Way Seamless Portals
+        // Portals System
         let portalBarn, portalBarnScreen;
         let portalOutside, portalOutsideScreen;
         let portalCamToMeadow, renderTargetMeadow;
         let portalCamToBarn, renderTargetBarn;
         let canTeleport = true;
 
-        // Portal Positions
-        const posOutside = new THREE.Vector3(0, 0, 15); // Outside Meadow Portal
-        const posBarn = new THREE.Vector3(60, 3.2, 60);    // Inside Barn Portal
+        const posOutside = new THREE.Vector3(0, 0, 15);
+        const posBarn = new THREE.Vector3(60, 3.2, 60);
 
         function getHillHeight(x, z) {
             if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
@@ -112,7 +166,31 @@
             mesh.add(outlineMesh);
         }
 
-        function buildGooseMesh(accentColor = 0xff7b00, isLocal = false) {
+        function createNametagSprite(nickname) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.fillRect(0, 0, 256, 64);
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, 0, 256, 64);
+
+            ctx.font = 'Bold 28px Courier New';
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.fillText(nickname, 128, 42);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+            const sprite = new THREE.Sprite(spriteMat);
+            sprite.scale.set(3, 0.75, 1);
+            sprite.position.y = 2.8;
+            return sprite;
+        }
+
+        function buildGooseMesh(accentColor = 0xff7b00, isLocal = false, nickname = "Goose") {
             const group = new THREE.Group();
             
             if (isLocal) {
@@ -147,7 +225,27 @@
             headGroup.add(beak);
 
             group.add(headGroup);
+
+            // Add floating nametag sprite over goose
+            const nametag = createNametagSprite(nickname);
+            group.add(nametag);
+
             return { group, headGroup };
+        }
+
+        function joinGame() {
+            const input = document.getElementById('nickname-input');
+            if (input.value.trim() !== "") {
+                playerNickname = input.value.trim();
+            }
+            document.getElementById('login-screen').style.display = 'none';
+            
+            const container = document.getElementById('canvas-container');
+            container.requestPointerLock();
+            
+            if (socket) {
+                socket.emit('setNickname', playerNickname);
+            }
         }
 
         function init() {
@@ -172,7 +270,9 @@
             container.appendChild(renderer.domElement);
 
             container.addEventListener('click', () => {
-                container.requestPointerLock();
+                if (document.activeElement !== document.getElementById('chat-input')) {
+                    container.requestPointerLock();
+                }
             });
 
             document.addEventListener('pointerlockchange', () => {
@@ -188,7 +288,7 @@
                 pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
             });
 
-            // Toon Texture Map
+            // Toon Texture
             const canvas = document.createElement('canvas');
             canvas.width = 4; canvas.height = 1;
             const ctx = canvas.getContext('2d');
@@ -208,7 +308,7 @@
             createHollowBarn();
             setupTwoWayPortals();
 
-            // Network Handlers
+            // Network Messaging & Player Events
             socket.on('currentPlayers', (players) => {
                 Object.keys(players).forEach((id) => {
                     if (id !== socket.id) addOtherPlayer(players[id]);
@@ -231,6 +331,10 @@
                 }
             });
 
+            socket.on('chatMessage', (data) => {
+                appendChatMessage(data.nickname, data.message);
+            });
+
             socket.on('playerHonked', (id) => {
                 if (otherGeese[id]) {
                     const h = otherGeese[id].headGroup;
@@ -247,8 +351,27 @@
                 }
             });
 
+            // Keyboard Controls & Chat Handler
+            const chatInput = document.getElementById('chat-input');
             window.addEventListener('keydown', (e) => {
+                if (document.activeElement === chatInput) {
+                    if (e.code === 'Enter') {
+                        sendChatMessage();
+                    } else if (e.code === 'Escape') {
+                        chatInput.blur();
+                        container.requestPointerLock();
+                    }
+                    return;
+                }
+
                 keys[e.code] = true;
+
+                if (e.code === 'KeyT' || e.code === 'Enter') {
+                    e.preventDefault();
+                    document.exitPointerLock();
+                    chatInput.focus();
+                }
+
                 if (e.code === 'Space' && isGrounded) {
                     velocityY = jumpStrength;
                     isGrounded = false;
@@ -268,6 +391,26 @@
             });
 
             animate();
+        }
+
+        function sendChatMessage() {
+            const chatInput = document.getElementById('chat-input');
+            const msg = chatInput.value.trim();
+            if (msg !== "") {
+                socket.emit('chatMessage', { nickname: playerNickname, message: msg });
+                appendChatMessage(playerNickname, msg);
+                chatInput.value = "";
+            }
+            chatInput.blur();
+            document.getElementById('canvas-container').requestPointerLock();
+        }
+
+        function appendChatMessage(sender, message) {
+            const container = document.getElementById('chat-messages');
+            const msgEl = document.createElement('p');
+            msgEl.innerHTML = `<span style="color: #ff477e;">[${sender}]</span>: ${message}`;
+            container.appendChild(msgEl);
+            container.scrollTop = container.scrollHeight;
         }
 
         function createHollowBarn() {
@@ -328,7 +471,6 @@
         }
 
         function setupTwoWayPortals() {
-            // Automatically elevate outside portal above local hill height
             posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 3.2;
 
             renderTargetMeadow = new THREE.WebGLRenderTarget(1024, 1024);
@@ -342,7 +484,7 @@
             const frameMatBlue = createToonMaterial(0x00f0ff);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // --- 1. BARN PORTAL ---
+            // Barn Portal
             portalBarn = new THREE.Group();
             portalBarn.position.copy(posBarn);
 
@@ -357,7 +499,7 @@
             portalBarn.add(portalBarnScreen);
             scene.add(portalBarn);
 
-            // --- 2. OUTSIDE MEADOW PORTAL ---
+            // Outside Meadow Portal
             portalOutside = new THREE.Group();
             portalOutside.position.copy(posOutside);
 
@@ -385,7 +527,7 @@
         }
 
         function addOtherPlayer(info) {
-            const gooseData = buildGooseMesh(info.color, false);
+            const gooseData = buildGooseMesh(info.color, false, info.nickname || "Goose");
             gooseData.group.position.set(info.x, getHillHeight(info.x, info.z), info.z);
             scene.add(gooseData.group);
             otherGeese[info.id] = gooseData;
@@ -402,7 +544,6 @@
         }
 
         function updatePortalCameras() {
-            // Live view inside Barn Portal (Rendering Meadow destination)
             portalCamToMeadow.position.copy(posOutside);
             portalCamToMeadow.rotation.y = localGoose.rotation.y;
             portalCamToMeadow.rotation.x = pitchObject.rotation.x;
@@ -412,7 +553,6 @@
             renderer.render(scene, portalCamToMeadow);
             portalBarnScreen.visible = true;
 
-            // Live view inside Meadow Portal (Rendering Barn interior destination)
             portalCamToBarn.position.copy(posBarn);
             portalCamToBarn.rotation.y = localGoose.rotation.y;
             portalCamToBarn.rotation.x = pitchObject.rotation.x;
@@ -428,13 +568,11 @@
         function checkPortalTeleport() {
             if (!canTeleport) return;
 
-            // Teleport Barn -> Outside Meadow
             if (localGoose.position.distanceTo(posBarn) < 2.5) {
                 localGoose.position.set(posOutside.x, getHillHeight(posOutside.x, posOutside.z + 3.5), posOutside.z + 3.5);
                 canTeleport = false;
                 setTimeout(() => canTeleport = true, 1000);
             }
-            // Teleport Outside Meadow -> Inside Barn
             else if (localGoose.position.distanceTo(posOutside) < 2.5) {
                 localGoose.position.set(posBarn.x, 0.1, posBarn.z + 3.5);
                 canTeleport = false;
@@ -445,44 +583,45 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            let moved = false;
-            const moveSpeed = 0.28;
+            if (document.activeElement !== document.getElementById('chat-input')) {
+                let moved = false;
+                const moveSpeed = 0.28;
 
-            const moveVector = new THREE.Vector3();
-            if (keys['KeyW']) moveVector.z -= 1;
-            if (keys['KeyS']) moveVector.z += 1;
-            if (keys['KeyA']) moveVector.x -= 1;
-            if (keys['KeyD']) moveVector.x += 1;
+                const moveVector = new THREE.Vector3();
+                if (keys['KeyW']) moveVector.z -= 1;
+                if (keys['KeyS']) moveVector.z += 1;
+                if (keys['KeyA']) moveVector.x -= 1;
+                if (keys['KeyD']) moveVector.x += 1;
 
-            if (moveVector.length() > 0) {
-                moveVector.normalize();
-                moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
-                localGoose.position.addScaledVector(moveVector, moveSpeed);
-                moved = true;
-            }
+                if (moveVector.length() > 0) {
+                    moveVector.normalize();
+                    moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+                    localGoose.position.addScaledVector(moveVector, moveSpeed);
+                    moved = true;
+                }
 
-            velocityY += gravity;
-            localGoose.position.y += velocityY;
+                velocityY += gravity;
+                localGoose.position.y += velocityY;
 
-            const floorY = getHillHeight(localGoose.position.x, localGoose.position.z);
-            if (localGoose.position.y <= floorY) {
-                localGoose.position.y = floorY;
-                velocityY = 0;
-                isGrounded = true;
-            }
+                const floorY = getHillHeight(localGoose.position.x, localGoose.position.z);
+                if (localGoose.position.y <= floorY) {
+                    localGoose.position.y = floorY;
+                    velocityY = 0;
+                    isGrounded = true;
+                }
 
-            checkPortalTeleport();
+                checkPortalTeleport();
 
-            if (moved) {
-                socket.emit('playerMovement', {
-                    x: localGoose.position.x,
-                    z: localGoose.position.z,
-                    rotation: localGoose.rotation.y
-                });
+                if (moved) {
+                    socket.emit('playerMovement', {
+                        x: localGoose.position.x,
+                        z: localGoose.position.z,
+                        rotation: localGoose.rotation.y
+                    });
+                }
             }
 
             updatePortalCameras();
-
             renderer.render(scene, mainCamera);
         }
 
