@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer FPS Goose World</title>
+    <title>Multiplayer FPS Goose World - Expanded</title>
     <style>
         body { 
             margin: 0; 
@@ -124,7 +124,7 @@
         let otherGeese = {};
         let keys = {};
         let toonGradientMap;
-        const terrainSize = 180;
+        const terrainSize = 450; // Increased Map Size
         let playerNickname = "Goose";
 
         // FPS Physics
@@ -145,9 +145,12 @@
         const posBarn = new THREE.Vector3(60, 3.2, 60);
 
         function getHillHeight(x, z) {
-            if (Math.hypot(x - 60, z - 60) < 18) return 0.05; 
-            const h1 = Math.sin(x * 0.08) * 5.0 + Math.cos(z * 0.08) * 5.0;
-            const h2 = Math.sin((x + z) * 0.04) * 6.0;
+            // Keep barn area flat
+            if (Math.hypot(x - 60, z - 60) < 22) return 0.05; 
+            
+            // Rolling hills for expanded world
+            const h1 = Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
+            const h2 = Math.sin((x + z) * 0.015) * 10.0;
             return h1 + h2;
         }
 
@@ -192,12 +195,8 @@
 
         function buildGooseMesh(accentColor = 0xff7b00, isLocal = false, nickname = "Goose") {
             const group = new THREE.Group();
-            
-            if (isLocal) {
-                return { group, headGroup: group };
-            }
+            if (isLocal) return { group, headGroup: group };
 
-            // Body
             const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
             bodyGeo.scale(1, 0.85, 1.4);
             const body = new THREE.Mesh(bodyGeo, createToonMaterial(0xffffff));
@@ -205,7 +204,6 @@
             attachOutline(body, 1.08);
             group.add(body);
 
-            // Neck & Head
             const headGroup = new THREE.Group();
             headGroup.position.set(0, 1.1, -0.8);
 
@@ -216,7 +214,6 @@
             attachOutline(neck, 1.12);
             headGroup.add(neck);
 
-            // Beak
             const beakGeo = new THREE.ConeGeometry(0.2, 0.7, 8);
             const beak = new THREE.Mesh(beakGeo, createToonMaterial(accentColor));
             beak.position.set(0, 1.1, -0.45);
@@ -226,11 +223,62 @@
 
             group.add(headGroup);
 
-            // Add floating nametag sprite over goose
             const nametag = createNametagSprite(nickname);
             group.add(nametag);
 
             return { group, headGroup };
+        }
+
+        function createTree(x, z) {
+            const tree = new THREE.Group();
+            const y = getHillHeight(x, z);
+            tree.position.set(x, y, z);
+
+            // Random variation in height and size
+            const scale = 0.8 + Math.random() * 0.6;
+            tree.scale.set(scale, scale, scale);
+
+            // Trunk
+            const trunkGeo = new THREE.CylinderGeometry(0.4, 0.7, 4, 7);
+            const trunkMat = createToonMaterial(0x5c3d2e);
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = 2;
+            attachOutline(trunk, 1.1);
+            tree.add(trunk);
+
+            // Foliage Colors (Variety of toon greens)
+            const greenShades = [0x2b9348, 0x55a630, 0x80b918, 0x155d27];
+            const leafMat = createToonMaterial(greenShades[Math.floor(Math.random() * greenShades.length)]);
+
+            // Stacked Cones for Toon Tree Look
+            const layers = 3;
+            for (let i = 0; i < layers; i++) {
+                const coneRadius = 3.2 - i * 0.8;
+                const coneHeight = 3.5;
+                const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 7);
+                const cone = new THREE.Mesh(coneGeo, leafMat);
+                cone.position.y = 3.5 + i * 2.1;
+                attachOutline(cone, 1.08);
+                tree.add(cone);
+            }
+
+            scene.add(tree);
+        }
+
+        function generateForest() {
+            const numTrees = 280; // Scatter 280 trees across open world
+            for (let i = 0; i < numTrees; i++) {
+                const x = (Math.random() - 0.5) * (terrainSize - 40);
+                const z = (Math.random() - 0.5) * (terrainSize - 40);
+
+                // Avoid spawning trees directly on barn or portal spawns
+                const distToBarn = Math.hypot(x - 60, z - 60);
+                const distToSpawn = Math.hypot(x, z);
+
+                if (distToBarn > 25 && distToSpawn > 12) {
+                    createTree(x, z);
+                }
+            }
         }
 
         function joinGame() {
@@ -253,7 +301,8 @@
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x70d6ff);
-            scene.fog = new THREE.FogExp2(0x70d6ff, 0.005);
+            // Lighter fog density for open-world draw distance
+            scene.fog = new THREE.FogExp2(0x70d6ff, 0.0035);
 
             mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
@@ -301,14 +350,15 @@
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
             const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
-            dirLight.position.set(50, 80, 30);
+            dirLight.position.set(100, 120, 50);
             scene.add(dirLight);
 
             createTerrain();
+            generateForest();
             createHollowBarn();
             setupTwoWayPortals();
 
-            // Network Messaging & Player Events
+            // Socket Listeners
             socket.on('currentPlayers', (players) => {
                 Object.keys(players).forEach((id) => {
                     if (id !== socket.id) addOtherPlayer(players[id]);
@@ -351,7 +401,7 @@
                 }
             });
 
-            // Keyboard Controls & Chat Handler
+            // Chat Input Controls
             const chatInput = document.getElementById('chat-input');
             window.addEventListener('keydown', (e) => {
                 if (document.activeElement === chatInput) {
@@ -484,7 +534,6 @@
             const frameMatBlue = createToonMaterial(0x00f0ff);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            // Barn Portal
             portalBarn = new THREE.Group();
             portalBarn.position.copy(posBarn);
 
@@ -499,7 +548,6 @@
             portalBarn.add(portalBarnScreen);
             scene.add(portalBarn);
 
-            // Outside Meadow Portal
             portalOutside = new THREE.Group();
             portalOutside.position.copy(posOutside);
 
@@ -516,7 +564,7 @@
         }
 
         function createTerrain() {
-            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 96, 96);
+            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
             floorGeo.rotateX(-Math.PI / 2);
             const pos = floorGeo.attributes.position;
             for (let i = 0; i < pos.count; i++) {
@@ -585,7 +633,7 @@
 
             if (document.activeElement !== document.getElementById('chat-input')) {
                 let moved = false;
-                const moveSpeed = 0.28;
+                const moveSpeed = 0.35; // Slightly faster movement for larger world
 
                 const moveVector = new THREE.Vector3();
                 if (keys['KeyW']) moveVector.z -= 1;
