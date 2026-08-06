@@ -231,28 +231,24 @@
         }
 
         /* --- KANYE WEST NPC SYSTEM --- */
-        function createKanyeHeadTexture() {
+        function createKanyeHeadTextureFallback() {
             const canvas = document.createElement('canvas');
             canvas.width = 128; canvas.height = 128;
             const ctx = canvas.getContext('2d');
             
-            // Stylized Kanye face canvas fallback
             ctx.fillStyle = '#8d5524';
             ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fill();
             
-            // Sunglasses
             ctx.fillStyle = '#111';
             ctx.fillRect(25, 45, 32, 22);
             ctx.fillRect(71, 45, 32, 22);
             ctx.fillRect(55, 52, 18, 5);
 
-            // Mouth
             ctx.strokeStyle = '#3a1e05';
             ctx.lineWidth = 4;
             ctx.beginPath(); ctx.arc(64, 85, 15, 0, Math.PI); ctx.stroke();
 
-            const texture = new THREE.CanvasTexture(canvas);
-            return texture;
+            return new THREE.CanvasTexture(canvas);
         }
 
         function spawnKanyeNPC(x, z) {
@@ -266,16 +262,16 @@
             attachOutline(body, 1.08);
             group.add(body);
 
-            // Kanye Head (PNG Texture Billboard Sprite)
+            // Kanye Head Sprite
             const spriteMat = new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true });
             const headSprite = new THREE.Sprite(spriteMat);
-            headSprite.scale.set(2.2, 2.2, 1);
+            headSprite.scale.set(2.5, 2.5, 1);
             headSprite.position.y = 2.8;
             group.add(headSprite);
 
             // Kanye Nametag
             const tag = createNametagSprite("YE");
-            tag.position.y = 4.0;
+            tag.position.y = 4.2;
             group.add(tag);
 
             const initialY = getHillHeight(x, z);
@@ -299,11 +295,10 @@
                 const pos = npc.mesh.position;
                 const dist = Math.hypot(npc.targetX - pos.x, npc.targetZ - pos.z);
 
-                // Pick a new aimless target destination if target reached or timer expired
                 if (dist < 1.5 || npc.timer <= 0) {
                     npc.targetX = (Math.random() - 0.5) * (terrainSize - 60);
                     npc.targetZ = (Math.random() - 0.5) * (terrainSize - 60);
-                    npc.timer = Math.floor(Math.random() * 300) + 200; // frames before picking new spot
+                    npc.timer = Math.floor(Math.random() * 300) + 200;
                 } else {
                     npc.timer--;
                     const angle = Math.atan2(npc.targetX - pos.x, npc.targetZ - pos.z);
@@ -418,13 +413,13 @@
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
-            // Load Kanye Texture
+            // Load Kanye image from project directory
             const textureLoader = new THREE.TextureLoader();
             kanyeTexture = textureLoader.load(
-                'https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Kanye_West_at_the_2009_Tribeca_Film_Festival-2_%28cropped%29.jpg/220px-Kanye_West_at_the_2009_Tribeca_Film_Festival-2_%28cropped%29.jpg',
+                'kanye.png',
                 undefined,
                 undefined,
-                () => { kanyeTexture = createKanyeHeadTexture(); }
+                () => { kanyeTexture = createKanyeHeadTextureFallback(); }
             );
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
@@ -509,7 +504,6 @@
                 }
 
                 if (e.code === 'KeyK') {
-                    // Spawn Kanye right in front of the local goose
                     const dir = new THREE.Vector3(0, 0, -5).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
                     spawnKanyeNPC(localGoose.position.x + dir.x, localGoose.position.z + dir.z);
                 }
