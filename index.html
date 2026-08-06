@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer FPS Goose World - Expanded</title>
+    <title>Multiplayer FPS Goose World - Kanye Edition</title>
     <style>
         body { 
             margin: 0; 
@@ -103,6 +103,7 @@
     <div id="hud">
         <h1>🪿 FPS Goose Squad</h1>
         <p>Active Geese: <span id="geese-count">1</span></p>
+        <p>Kanye Count: <span id="kanye-count">0</span></p>
     </div>
     <div id="honk-text">HONK!</div>
     <div id="controls">
@@ -110,6 +111,7 @@
         [W, A, S, D] : Walk<br>
         [SPACE] : Jump<br>
         [E / LEFT CLICK] : HONK!<br>
+        [K] : SPAWN KANYE<br>
         [T / ENTER] : Open Chat
     </div>
 
@@ -122,9 +124,11 @@
         let scene, mainCamera, renderer, socket;
         let localGoose, pitchObject;
         let otherGeese = {};
+        let kanyeNPCs = [];
+        let kanyeTexture;
         let keys = {};
         let toonGradientMap;
-        const terrainSize = 450; // Increased Map Size
+        const terrainSize = 450;
         let playerNickname = "Goose";
 
         // FPS Physics
@@ -145,10 +149,7 @@
         const posBarn = new THREE.Vector3(60, 3.2, 60);
 
         function getHillHeight(x, z) {
-            // Keep barn area flat
             if (Math.hypot(x - 60, z - 60) < 22) return 0.05; 
-            
-            // Rolling hills for expanded world
             const h1 = Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
             const h2 = Math.sin((x + z) * 0.015) * 10.0;
             return h1 + h2;
@@ -229,16 +230,98 @@
             return { group, headGroup };
         }
 
+        /* --- KANYE WEST NPC SYSTEM --- */
+        function createKanyeHeadTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            
+            // Stylized Kanye face canvas fallback
+            ctx.fillStyle = '#8d5524';
+            ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fill();
+            
+            // Sunglasses
+            ctx.fillStyle = '#111';
+            ctx.fillRect(25, 45, 32, 22);
+            ctx.fillRect(71, 45, 32, 22);
+            ctx.fillRect(55, 52, 18, 5);
+
+            // Mouth
+            ctx.strokeStyle = '#3a1e05';
+            ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.arc(64, 85, 15, 0, Math.PI); ctx.stroke();
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        function spawnKanyeNPC(x, z) {
+            const group = new THREE.Group();
+
+            // Toon Suit Body
+            const bodyGeo = new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10);
+            const bodyMat = createToonMaterial(0x111111);
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 1.1;
+            attachOutline(body, 1.08);
+            group.add(body);
+
+            // Kanye Head (PNG Texture Billboard Sprite)
+            const spriteMat = new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true });
+            const headSprite = new THREE.Sprite(spriteMat);
+            headSprite.scale.set(2.2, 2.2, 1);
+            headSprite.position.y = 2.8;
+            group.add(headSprite);
+
+            // Kanye Nametag
+            const tag = createNametagSprite("YE");
+            tag.position.y = 4.0;
+            group.add(tag);
+
+            const initialY = getHillHeight(x, z);
+            group.position.set(x, initialY, z);
+            scene.add(group);
+
+            const npc = {
+                mesh: group,
+                targetX: x,
+                targetZ: z,
+                speed: 0.08 + Math.random() * 0.06,
+                timer: 0
+            };
+
+            kanyeNPCs.push(npc);
+            document.getElementById('kanye-count').innerText = kanyeNPCs.length;
+        }
+
+        function updateKanyeNPCs() {
+            kanyeNPCs.forEach(npc => {
+                const pos = npc.mesh.position;
+                const dist = Math.hypot(npc.targetX - pos.x, npc.targetZ - pos.z);
+
+                // Pick a new aimless target destination if target reached or timer expired
+                if (dist < 1.5 || npc.timer <= 0) {
+                    npc.targetX = (Math.random() - 0.5) * (terrainSize - 60);
+                    npc.targetZ = (Math.random() - 0.5) * (terrainSize - 60);
+                    npc.timer = Math.floor(Math.random() * 300) + 200; // frames before picking new spot
+                } else {
+                    npc.timer--;
+                    const angle = Math.atan2(npc.targetX - pos.x, npc.targetZ - pos.z);
+                    pos.x += Math.sin(angle) * npc.speed;
+                    pos.z += Math.cos(angle) * npc.speed;
+                    pos.y = getHillHeight(pos.x, pos.z);
+                }
+            });
+        }
+
         function createTree(x, z) {
             const tree = new THREE.Group();
             const y = getHillHeight(x, z);
             tree.position.set(x, y, z);
 
-            // Random variation in height and size
             const scale = 0.8 + Math.random() * 0.6;
             tree.scale.set(scale, scale, scale);
 
-            // Trunk
             const trunkGeo = new THREE.CylinderGeometry(0.4, 0.7, 4, 7);
             const trunkMat = createToonMaterial(0x5c3d2e);
             const trunk = new THREE.Mesh(trunkGeo, trunkMat);
@@ -246,16 +329,11 @@
             attachOutline(trunk, 1.1);
             tree.add(trunk);
 
-            // Foliage Colors (Variety of toon greens)
             const greenShades = [0x2b9348, 0x55a630, 0x80b918, 0x155d27];
             const leafMat = createToonMaterial(greenShades[Math.floor(Math.random() * greenShades.length)]);
 
-            // Stacked Cones for Toon Tree Look
-            const layers = 3;
-            for (let i = 0; i < layers; i++) {
-                const coneRadius = 3.2 - i * 0.8;
-                const coneHeight = 3.5;
-                const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 7);
+            for (let i = 0; i < 3; i++) {
+                const coneGeo = new THREE.ConeGeometry(3.2 - i * 0.8, 3.5, 7);
                 const cone = new THREE.Mesh(coneGeo, leafMat);
                 cone.position.y = 3.5 + i * 2.1;
                 attachOutline(cone, 1.08);
@@ -266,16 +344,10 @@
         }
 
         function generateForest() {
-            const numTrees = 280; // Scatter 280 trees across open world
-            for (let i = 0; i < numTrees; i++) {
+            for (let i = 0; i < 280; i++) {
                 const x = (Math.random() - 0.5) * (terrainSize - 40);
                 const z = (Math.random() - 0.5) * (terrainSize - 40);
-
-                // Avoid spawning trees directly on barn or portal spawns
-                const distToBarn = Math.hypot(x - 60, z - 60);
-                const distToSpawn = Math.hypot(x, z);
-
-                if (distToBarn > 25 && distToSpawn > 12) {
+                if (Math.hypot(x - 60, z - 60) > 25 && Math.hypot(x, z) > 12) {
                     createTree(x, z);
                 }
             }
@@ -301,7 +373,6 @@
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x70d6ff);
-            // Lighter fog density for open-world draw distance
             scene.fog = new THREE.FogExp2(0x70d6ff, 0.0035);
 
             mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -330,7 +401,6 @@
 
             document.addEventListener('mousemove', (e) => {
                 if (!isPointerLocked) return;
-                
                 const mouseSensitivity = 0.002;
                 localGoose.rotation.y -= e.movementX * mouseSensitivity;
                 pitchObject.rotation.x -= e.movementY * mouseSensitivity;
@@ -348,6 +418,15 @@
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
+            // Load Kanye Texture
+            const textureLoader = new THREE.TextureLoader();
+            kanyeTexture = textureLoader.load(
+                'https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Kanye_West_at_the_2009_Tribeca_Film_Festival-2_%28cropped%29.jpg/220px-Kanye_West_at_the_2009_Tribeca_Film_Festival-2_%28cropped%29.jpg',
+                undefined,
+                undefined,
+                () => { kanyeTexture = createKanyeHeadTexture(); }
+            );
+
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
             const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
             dirLight.position.set(100, 120, 50);
@@ -357,6 +436,13 @@
             generateForest();
             createHollowBarn();
             setupTwoWayPortals();
+
+            // Initial Kanye Squad Spawner
+            for (let i = 0; i < 20; i++) {
+                const rx = (Math.random() - 0.5) * (terrainSize - 80);
+                const rz = (Math.random() - 0.5) * (terrainSize - 80);
+                spawnKanyeNPC(rx, rz);
+            }
 
             // Socket Listeners
             socket.on('currentPlayers', (players) => {
@@ -401,7 +487,7 @@
                 }
             });
 
-            // Chat Input Controls
+            // Chat Input & Key Controls
             const chatInput = document.getElementById('chat-input');
             window.addEventListener('keydown', (e) => {
                 if (document.activeElement === chatInput) {
@@ -420,6 +506,12 @@
                     e.preventDefault();
                     document.exitPointerLock();
                     chatInput.focus();
+                }
+
+                if (e.code === 'KeyK') {
+                    // Spawn Kanye right in front of the local goose
+                    const dir = new THREE.Vector3(0, 0, -5).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+                    spawnKanyeNPC(localGoose.position.x + dir.x, localGoose.position.z + dir.z);
                 }
 
                 if (e.code === 'Space' && isGrounded) {
@@ -633,7 +725,7 @@
 
             if (document.activeElement !== document.getElementById('chat-input')) {
                 let moved = false;
-                const moveSpeed = 0.35; // Slightly faster movement for larger world
+                const moveSpeed = 0.35;
 
                 const moveVector = new THREE.Vector3();
                 if (keys['KeyW']) moveVector.z -= 1;
@@ -669,6 +761,7 @@
                 }
             }
 
+            updateKanyeNPCs();
             updatePortalCameras();
             renderer.render(scene, mainCamera);
         }
