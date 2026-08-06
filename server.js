@@ -2,38 +2,41 @@ const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
-const path = require('path');
 
-// Serve static files directly from the root directory
 app.use(express.static(__dirname));
 
-// Serve index.html when hitting the home route
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
 let players = {};
+let kanyes = {};
+let nextKanyeId = 1;
+
+// Server-side Kanye Spawner (Spawns a hostile Kanye every 5 seconds)
+setInterval(() => {
+    if (Object.keys(players).length > 0) {
+        const id = 'kanye_' + nextKanyeId++;
+        const rx = (Math.random() - 0.5) * 350;
+        const rz = (Math.random() - 0.5) * 350;
+        kanyes[id] = { id, x: rx, z: rz };
+        io.emit('kanyeSpawned', kanyes[id]);
+    }
+}, 5000);
 
 io.on('connection', (socket) => {
-    console.log('A goose connected:', socket.id);
-
     players[socket.id] = {
         id: socket.id,
-        x: Math.random() * 20 - 10,
-        z: Math.random() * 20 - 10,
+        x: 0,
+        z: 0,
         rotation: 0,
-        color: Math.floor(Math.random() * 0xffffff),
-        nickname: "Goose"
+        nickname: "Goose",
+        color: Math.random() * 0xffffff
     };
 
+    // Send existing state to new player
     socket.emit('currentPlayers', players);
+    socket.emit('currentKanyes', kanyes);
     socket.broadcast.emit('newPlayer', players[socket.id]);
 
     socket.on('setNickname', (nickname) => {
-        if (players[socket.id]) {
-            players[socket.id].nickname = nickname || "Goose";
-            socket.broadcast.emit('playerMoved', players[socket.id]);
-        }
+        if (players[socket.id]) players[socket.id].nickname = nickname;
     });
 
     socket.on('playerMovement', (movementData) => {
@@ -45,15 +48,20 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('chatMessage', (data) => {
-        socket.broadcast.emit('chatMessage', {
-            nickname: data.nickname || players[socket.id]?.nickname || "Goose",
-            message: data.message
-        });
-    });
-
     socket.on('honk', () => {
         socket.broadcast.emit('playerHonked', socket.id);
+    });
+
+    socket.on('chatMessage', (data) => {
+        socket.broadcast.emit('chatMessage', data);
+    });
+
+    // Handle Mic Attack / Enemy Defeat Sync
+    socket.on('hitKanye', (kanyeId) => {
+        if (kanyes[kanyeId]) {
+            delete kanyes[kanyeId];
+            io.emit('kanyeDefeated', { id: kanyeId, attackerId: socket.id });
+        }
     });
 
     socket.on('disconnect', () => {
@@ -62,7 +70,6 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+http.listen(3000, () => {
+    console.log('Server listening on port 3000');
 });
