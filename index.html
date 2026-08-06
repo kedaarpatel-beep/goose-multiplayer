@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer FPS Goose World - Kanye Attack Edition</title>
+    <title>Multiplayer FPS Goose World - Synced Kanyes & Slide</title>
     <style>
         body { 
             margin: 0; 
@@ -14,7 +14,6 @@
         }
         #canvas-container { width: 100vw; height: 100vh; cursor: pointer; }
         
-        /* Login & Server/Map Screen */
         #login-screen {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(112, 214, 255, 0.95);
@@ -42,7 +41,6 @@
         }
         #play-btn:active { transform: translateY(4px); box-shadow: none; }
 
-        /* HUD & Controls */
         #hud {
             position: absolute; top: 20px; left: 20px;
             background: rgba(255, 255, 255, 0.9); color: #1b4332;
@@ -71,7 +69,6 @@
             border: 2px solid #000000; border-radius: 50%; pointer-events: none;
         }
 
-        /* Chat Overlay */
         #chat-container {
             position: absolute; bottom: 20px; right: 20px; width: 320px;
             background: rgba(255, 255, 255, 0.9); border: 3px solid #1b4332;
@@ -124,9 +121,9 @@
     <div id="controls">
         <b>CLICK SCREEN TO LOCK MOUSE</b><br>
         [W, A, S, D] : Walk<br>
+        [C / CTRL] : 50% Speed Boost Slide<br>
         [SPACE] : Jump<br>
         [LEFT CLICK / E] : Mic Sword Attack!<br>
-        [K] : SPAWN HOSTILE KANYE<br>
         [T / ENTER] : Open Chat
     </div>
 
@@ -139,7 +136,7 @@
         let scene, mainCamera, renderer, socket;
         let localGoose, pitchObject, micWeaponGroup;
         let otherGeese = {};
-        let kanyeNPCs = [];
+        let kanyeNPCs = {};
         let kanyeTexture;
         let keys = {};
         let toonGradientMap;
@@ -148,20 +145,20 @@
         let currentMap = "meadow";
         let score = 0;
 
-        // Weapon Animation & Physics
+        // Mechanics & Physics
         let isAttacking = false;
         let attackProgress = 0;
         let isPointerLocked = false;
         let velocityY = 0;
         let isGrounded = true;
+        let isSliding = false;
+        let slideTimer = 0;
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        // Portals System
-        let portalBarn, portalBarnScreen;
-        let portalOutside, portalOutsideScreen;
-        let portalCamToMeadow, renderTargetMeadow;
-        let portalCamToBarn, renderTargetBarn;
+        // Portals
+        let portalBarn, portalBarnScreen, portalOutside, portalOutsideScreen;
+        let portalCamToMeadow, renderTargetMeadow, portalCamToBarn, renderTargetBarn;
         let canTeleport = true;
 
         const posOutside = new THREE.Vector3(0, 0, 15);
@@ -169,19 +166,13 @@
 
         function getHillHeight(x, z) {
             if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
-            if (currentMap === "cyber") return 0; // Flat neon arena
+            if (currentMap === "cyber") return 0;
             if (Math.hypot(x - 60, z - 60) < 22) return 0.05; 
-            const h1 = Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
-            const h2 = Math.sin((x + z) * 0.015) * 10.0;
-            return h1 + h2;
+            return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
         }
 
         function createToonMaterial(colorHex, side = THREE.FrontSide) {
-            return new THREE.MeshToonMaterial({ 
-                color: colorHex, 
-                gradientMap: toonGradientMap,
-                side: side 
-            });
+            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap, side: side });
         }
 
         function attachOutline(mesh, outlineScale = 1.08) {
@@ -191,37 +182,25 @@
             mesh.add(outlineMesh);
         }
 
-        /* --- 🎙️ MICROPHONE SWORD WEAPON BUILDER --- */
         function createMicrophoneWeapon() {
             const micGroup = new THREE.Group();
 
-            // Metallic Handle
-            const handleGeo = new THREE.CylinderGeometry(0.04, 0.03, 0.8, 12);
-            const handleMat = createToonMaterial(0x222222);
-            const handle = new THREE.Mesh(handleGeo, handleMat);
+            const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.03, 0.8, 12), createToonMaterial(0x222222));
             handle.position.y = 0.2;
             attachOutline(handle, 1.1);
             micGroup.add(handle);
 
-            // Silver Ring
-            const ringGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12);
-            const ringMat = createToonMaterial(0xcccccc);
-            const ring = new THREE.Mesh(ringGeo, ringMat);
+            const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12), createToonMaterial(0xcccccc));
             ring.position.y = 0.55;
             micGroup.add(ring);
 
-            // Microphone Mesh/Grille Head
-            const headGeo = new THREE.SphereGeometry(0.09, 14, 14);
-            const headMat = createToonMaterial(0xdddddd);
-            const head = new THREE.Mesh(headGeo, headMat);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 14), createToonMaterial(0xdddddd));
             head.position.y = 0.65;
             attachOutline(head, 1.12);
             micGroup.add(head);
 
-            // Position in First-Person view (Right hand stance)
             micGroup.position.set(0.4, -0.3, -0.6);
             micGroup.rotation.set(0.2, -0.3, -0.2);
-
             return micGroup;
         }
 
@@ -229,21 +208,12 @@
             const canvas = document.createElement('canvas');
             canvas.width = 256; canvas.height = 64;
             const ctx = canvas.getContext('2d');
-            
-            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-            ctx.fillRect(0, 0, 256, 64);
-            ctx.strokeStyle = "#ffffff";
-            ctx.lineWidth = 4;
-            ctx.strokeRect(0, 0, 256, 64);
-
-            ctx.font = 'Bold 28px Courier New';
-            ctx.fillStyle = '#ffffff';
-            ctx.textAlign = 'center';
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)"; ctx.fillRect(0, 0, 256, 64);
+            ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4; ctx.strokeRect(0, 0, 256, 64);
+            ctx.font = 'Bold 28px Courier New'; ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center';
             ctx.fillText(nickname, 128, 42);
 
-            const texture = new THREE.CanvasTexture(canvas);
-            const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
-            const sprite = new THREE.Sprite(spriteMat);
+            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
             sprite.scale.set(3, 0.75, 1);
             sprite.position.y = 2.8;
             return sprite;
@@ -253,115 +223,65 @@
             const group = new THREE.Group();
             if (isLocal) return { group, headGroup: group };
 
-            const bodyGeo = new THREE.SphereGeometry(1, 16, 12);
-            bodyGeo.scale(1, 0.85, 1.4);
-            const body = new THREE.Mesh(bodyGeo, createToonMaterial(0xffffff));
-            body.position.y = 1;
-            attachOutline(body, 1.08);
-            group.add(body);
+            const body = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), createToonMaterial(0xffffff));
+            body.scale.set(1, 0.85, 1.4); body.position.y = 1;
+            attachOutline(body, 1.08); group.add(body);
 
             const headGroup = new THREE.Group();
             headGroup.position.set(0, 1.1, -0.8);
 
-            const neckGeo = new THREE.CylinderGeometry(0.2, 0.35, 1.3, 8);
-            const neck = new THREE.Mesh(neckGeo, createToonMaterial(0xffffff));
-            neck.position.set(0, 0.65, 0);
-            neck.rotation.x = -0.25;
-            attachOutline(neck, 1.12);
-            headGroup.add(neck);
+            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 1.3, 8), createToonMaterial(0xffffff));
+            neck.position.set(0, 0.65, 0); neck.rotation.x = -0.25;
+            attachOutline(neck, 1.12); headGroup.add(neck);
 
-            const beakGeo = new THREE.ConeGeometry(0.2, 0.7, 8);
-            const beak = new THREE.Mesh(beakGeo, createToonMaterial(accentColor));
-            beak.position.set(0, 1.1, -0.45);
-            beak.rotation.x = -Math.PI / 2;
-            attachOutline(beak, 1.15);
-            headGroup.add(beak);
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.7, 8), createToonMaterial(accentColor));
+            beak.position.set(0, 1.1, -0.45); beak.rotation.x = -Math.PI / 2;
+            attachOutline(beak, 1.15); headGroup.add(beak);
 
             group.add(headGroup);
-
-            const nametag = createNametagSprite(nickname);
-            group.add(nametag);
-
+            group.add(createNametagSprite(nickname));
             return { group, headGroup };
         }
 
-        /* --- KANYE WEST HOSTILE NPC SYSTEM --- */
         function createKanyeHeadTextureFallback() {
             const canvas = document.createElement('canvas');
             canvas.width = 128; canvas.height = 128;
             const ctx = canvas.getContext('2d');
-            
-            ctx.fillStyle = '#8d5524';
-            ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fill();
-            
-            ctx.fillStyle = '#111';
-            ctx.fillRect(25, 45, 32, 22);
-            ctx.fillRect(71, 45, 32, 22);
-            ctx.fillRect(55, 52, 18, 5);
-
-            ctx.strokeStyle = '#3a1e05';
-            ctx.lineWidth = 4;
-            ctx.beginPath(); ctx.arc(64, 85, 15, 0, Math.PI); ctx.stroke();
-
+            ctx.fillStyle = '#8d5524'; ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#111'; ctx.fillRect(25, 45, 32, 22); ctx.fillRect(71, 45, 32, 22);
             return new THREE.CanvasTexture(canvas);
         }
 
-        function spawnKanyeNPC(x, z) {
+        function spawnKanyeMesh(kData) {
             const group = new THREE.Group();
-
-            const bodyGeo = new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10);
-            const bodyMat = createToonMaterial(0x111111);
-            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10), createToonMaterial(0x111111));
             body.position.y = 1.1;
-            attachOutline(body, 1.08);
-            group.add(body);
+            attachOutline(body, 1.08); group.add(body);
 
-            const spriteMat = new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true });
-            const headSprite = new THREE.Sprite(spriteMat);
-            headSprite.scale.set(2.5, 2.5, 1);
-            headSprite.position.y = 2.8;
-            group.add(headSprite);
+            const headSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true }));
+            headSprite.scale.set(2.5, 2.5, 1); headSprite.position.y = 2.8; group.add(headSprite);
 
-            const tag = createNametagSprite("HOSTILE YE");
-            tag.position.y = 4.2;
-            group.add(tag);
+            const tag = createNametagSprite("HOSTILE YE"); tag.position.y = 4.2; group.add(tag);
 
-            const initialY = getHillHeight(x, z);
-            group.position.set(x, initialY, z);
+            group.position.set(kData.x, getHillHeight(kData.x, kData.z), kData.z);
             scene.add(group);
 
-            const npc = {
-                mesh: group,
-                speed: 0.12 + Math.random() * 0.05, // Fast hostile speed
-                health: 100
-            };
-
-            kanyeNPCs.push(npc);
-            document.getElementById('kanye-count').innerText = kanyeNPCs.length;
+            kanyeNPCs[kData.id] = { id: kData.id, mesh: group, speed: 0.13 };
+            document.getElementById('kanye-count').innerText = Object.keys(kanyeNPCs).length;
         }
 
-        /* HOSTILE AI: Chases nearest player immediately */
         function updateKanyeNPCs() {
             const allPlayers = [localGoose.position];
-            Object.values(otherGeese).forEach(og => {
-                if (og && og.group) allPlayers.push(og.group.position);
-            });
+            Object.values(otherGeese).forEach(og => { if (og && og.group) allPlayers.push(og.group.position); });
 
-            kanyeNPCs.forEach((npc, index) => {
+            Object.values(kanyeNPCs).forEach((npc) => {
                 const pos = npc.mesh.position;
-                
-                // Find nearest player target
                 let nearestPlayerPos = null;
                 let minDistSq = Infinity;
 
                 allPlayers.forEach(pPos => {
-                    const dx = pPos.x - pos.x;
-                    const dz = pPos.z - pos.z;
-                    const distSq = dx * dx + dz * dz;
-                    if (distSq < minDistSq) {
-                        minDistSq = distSq;
-                        nearestPlayerPos = pPos;
-                    }
+                    const distSq = (pPos.x - pos.x) ** 2 + (pPos.z - pos.z) ** 2;
+                    if (distSq < minDistSq) { minDistSq = distSq; nearestPlayerPos = pPos; }
                 });
 
                 if (nearestPlayerPos) {
@@ -374,77 +294,21 @@
             });
         }
 
-        function createTree(x, z) {
-            const tree = new THREE.Group();
-            const y = getHillHeight(x, z);
-            tree.position.set(x, y, z);
-
-            const scale = 0.8 + Math.random() * 0.6;
-            tree.scale.set(scale, scale, scale);
-
-            const trunkGeo = new THREE.CylinderGeometry(0.4, 0.7, 4, 7);
-            const trunkMat = createToonMaterial(0x5c3d2e);
-            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-            trunk.position.y = 2;
-            attachOutline(trunk, 1.1);
-            tree.add(trunk);
-
-            const greenShades = currentMap === "desert" ? [0xd4a373, 0xccd5ae] : [0x2b9348, 0x55a630, 0x80b918];
-            const leafMat = createToonMaterial(greenShades[Math.floor(Math.random() * greenShades.length)]);
-
-            for (let i = 0; i < 3; i++) {
-                const coneGeo = new THREE.ConeGeometry(3.2 - i * 0.8, 3.5, 7);
-                const cone = new THREE.Mesh(coneGeo, leafMat);
-                cone.position.y = 3.5 + i * 2.1;
-                attachOutline(cone, 1.08);
-                tree.add(cone);
-            }
-
-            scene.add(tree);
-        }
-
-        function generateForest() {
-            if (currentMap === "cyber") return;
-            for (let i = 0; i < 240; i++) {
-                const x = (Math.random() - 0.5) * (terrainSize - 40);
-                const z = (Math.random() - 0.5) * (terrainSize - 40);
-                if (Math.hypot(x - 60, z - 60) > 25 && Math.hypot(x, z) > 12) {
-                    createTree(x, z);
-                }
-            }
-        }
-
         function joinGame() {
             const input = document.getElementById('nickname-input');
-            if (input.value.trim() !== "") {
-                playerNickname = input.value.trim();
-            }
+            if (input.value.trim() !== "") playerNickname = input.value.trim();
             currentMap = document.getElementById('map-select').value;
             document.getElementById('login-screen').style.display = 'none';
-            
             applyMapTheme();
-
-            const container = document.getElementById('canvas-container');
-            container.requestPointerLock();
-            
-            if (socket) {
-                socket.emit('setNickname', playerNickname);
-            }
+            document.getElementById('canvas-container').requestPointerLock();
+            if (socket) socket.emit('setNickname', playerNickname);
         }
 
         function applyMapTheme() {
-            if (currentMap === "desert") {
-                scene.background = new THREE.Color(0xf2cc8f);
-                scene.fog.color = new THREE.Color(0xf2cc8f);
-            } else if (currentMap === "cyber") {
-                scene.background = new THREE.Color(0x0d0221);
-                scene.fog.color = new THREE.Color(0x0d0221);
-            } else {
-                scene.background = new THREE.Color(0x70d6ff);
-                scene.fog.color = new THREE.Color(0x70d6ff);
-            }
+            let color = (currentMap === "desert") ? 0xf2cc8f : (currentMap === "cyber") ? 0x0d0221 : 0x70d6ff;
+            scene.background = new THREE.Color(color);
+            scene.fog.color = new THREE.Color(color);
             createTerrain();
-            generateForest();
         }
 
         function init() {
@@ -460,7 +324,6 @@
             pitchObject = new THREE.Group();
             pitchObject.position.y = 1.6;
             
-            // Attach Camera & Microphone Sword to local Goose View
             pitchObject.add(mainCamera);
             micWeaponGroup = createMicrophoneWeapon();
             pitchObject.add(micWeaponGroup);
@@ -474,9 +337,7 @@
             container.appendChild(renderer.domElement);
 
             container.addEventListener('click', () => {
-                if (document.activeElement !== document.getElementById('chat-input')) {
-                    container.requestPointerLock();
-                }
+                if (document.activeElement !== document.getElementById('chat-input')) container.requestPointerLock();
             });
 
             document.addEventListener('pointerlockchange', () => {
@@ -485,13 +346,11 @@
 
             document.addEventListener('mousemove', (e) => {
                 if (!isPointerLocked) return;
-                const mouseSensitivity = 0.002;
-                localGoose.rotation.y -= e.movementX * mouseSensitivity;
-                pitchObject.rotation.x -= e.movementY * mouseSensitivity;
+                localGoose.rotation.y -= e.movementX * 0.002;
+                pitchObject.rotation.x -= e.movementY * 0.002;
                 pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
             });
 
-            // Toon Texture
             const canvas = document.createElement('canvas');
             canvas.width = 4; canvas.height = 1;
             const ctx = canvas.getContext('2d');
@@ -502,14 +361,7 @@
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
-            // Load Kanye Image Texture
-            const textureLoader = new THREE.TextureLoader();
-            kanyeTexture = textureLoader.load(
-                'kanye.png',
-                undefined,
-                undefined,
-                () => { kanyeTexture = createKanyeHeadTextureFallback(); }
-            );
+            kanyeTexture = new THREE.TextureLoader().load('kanye.png', undefined, undefined, () => { kanyeTexture = createKanyeHeadTextureFallback(); });
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
             const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
@@ -519,48 +371,31 @@
             createHollowBarn();
             setupTwoWayPortals();
 
-            // Initial Hostile Kanye Squad
-            for (let i = 0; i < 15; i++) {
-                const rx = (Math.random() - 0.5) * (terrainSize - 100);
-                const rz = (Math.random() - 0.5) * (terrainSize - 100);
-                spawnKanyeNPC(rx, rz);
-            }
-
-            // Socket Listeners
+            // Socket Listeners for Synced Enemies & Players
             socket.on('currentPlayers', (players) => {
-                Object.keys(players).forEach((id) => {
-                    if (id !== socket.id) addOtherPlayer(players[id]);
-                });
+                Object.keys(players).forEach(id => { if (id !== socket.id) addOtherPlayer(players[id]); });
                 updatePlayerCount();
             });
-
-            socket.on('newPlayer', (playerInfo) => {
-                addOtherPlayer(playerInfo);
-                updatePlayerCount();
-            });
-
-            socket.on('playerMoved', (playerInfo) => {
-                if (otherGeese[playerInfo.id]) {
-                    const g = otherGeese[playerInfo.id].group;
-                    g.position.x = playerInfo.x;
-                    g.position.z = playerInfo.z;
-                    g.position.y = getHillHeight(playerInfo.x, playerInfo.z);
-                    g.rotation.y = playerInfo.rotation;
+            socket.on('newPlayer', addOtherPlayer);
+            socket.on('playerMoved', (p) => {
+                if (otherGeese[p.id]) {
+                    otherGeese[p.id].group.position.set(p.x, getHillHeight(p.x, p.z), p.z);
+                    otherGeese[p.id].group.rotation.y = p.rotation;
                 }
             });
-
-            socket.on('chatMessage', (data) => {
-                appendChatMessage(data.nickname, data.message);
-            });
-
-            socket.on('playerHonked', (id) => {
-                if (otherGeese[id]) {
-                    const h = otherGeese[id].headGroup;
-                    h.rotation.x = -0.4;
-                    setTimeout(() => { h.rotation.x = 0; }, 200);
+            socket.on('currentKanyes', (kMap) => { Object.values(kMap).forEach(spawnKanyeMesh); });
+            socket.on('kanyeSpawned', spawnKanyeMesh);
+            socket.on('kanyeDefeated', (data) => {
+                if (kanyeNPCs[data.id]) {
+                    scene.remove(kanyeNPCs[data.id].mesh);
+                    delete kanyeNPCs[data.id];
+                    document.getElementById('kanye-count').innerText = Object.keys(kanyeNPCs).length;
+                }
+                if (data.attackerId === socket.id) {
+                    score++;
+                    document.getElementById('score-count').innerText = score;
                 }
             });
-
             socket.on('playerDisconnected', (id) => {
                 if (otherGeese[id]) {
                     scene.remove(otherGeese[id].group);
@@ -569,89 +404,67 @@
                 }
             });
 
-            // Chat Input & Key Controls
+            // Key Events
             const chatInput = document.getElementById('chat-input');
             window.addEventListener('keydown', (e) => {
                 if (document.activeElement === chatInput) {
-                    if (e.code === 'Enter') {
-                        sendChatMessage();
-                    } else if (e.code === 'Escape') {
-                        chatInput.blur();
-                        container.requestPointerLock();
-                    }
+                    if (e.code === 'Enter') sendChatMessage();
                     return;
                 }
-
                 keys[e.code] = true;
-
-                if (e.code === 'KeyT' || e.code === 'Enter') {
-                    e.preventDefault();
-                    document.exitPointerLock();
-                    chatInput.focus();
-                }
-
-                if (e.code === 'KeyK') {
-                    const dir = new THREE.Vector3(0, 0, -6).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
-                    spawnKanyeNPC(localGoose.position.x + dir.x, localGoose.position.z + dir.z);
-                }
-
-                if (e.code === 'Space' && isGrounded) {
-                    velocityY = jumpStrength;
-                    isGrounded = false;
-                }
-                if (e.code === 'KeyE') {
-                    performMicAttack();
-                }
+                if (e.code === 'Space' && isGrounded) { velocityY = jumpStrength; isGrounded = false; }
+                if (e.code === 'KeyE') performMicAttack();
+                if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !isSliding) startSlide();
             });
-            
             window.addEventListener('keyup', (e) => { keys[e.code] = false; });
             window.addEventListener('mousedown', (e) => {
-                if (isPointerLocked && e.button === 0) {
-                    performMicAttack();
-                }
+                if (isPointerLocked && e.button === 0) performMicAttack();
             });
 
             animate();
         }
 
-        /* 🎙️ MELEE ATTACK LOGIC */
+        /* 💨 SLIDE MECHANIC */
+        function startSlide() {
+            isSliding = true;
+            slideTimer = 35; // Frames of slide duration
+        }
+
+        function updateSlide() {
+            if (!isSliding) return;
+            slideTimer--;
+            pitchObject.position.y = 0.8; // Lower stance/POV height
+            if (slideTimer <= 0) {
+                isSliding = false;
+                pitchObject.position.y = 1.6;
+            }
+        }
+
+        /* 🎙️ MELEE HIT REGISTRATION */
         function performMicAttack() {
             if (isAttacking) return;
             isAttacking = true;
             attackProgress = 0;
 
             const honkUI = document.getElementById('honk-text');
-            honkUI.innerText = "MIC SLAM!";
-            honkUI.style.opacity = '1';
+            honkUI.innerText = "MIC SLAM!"; honkUI.style.opacity = '1';
             setTimeout(() => { honkUI.style.opacity = '0'; }, 250);
 
             if (socket) socket.emit('honk');
 
-            // Hit Detection: Check Kanyes in front of player
             const attackRange = 5.0;
-            for (let i = kanyeNPCs.length - 1; i >= 0; i--) {
-                const npc = kanyeNPCs[i];
-                const dist = localGoose.position.distanceTo(npc.mesh.position);
-                
-                if (dist <= attackRange) {
-                    // Knockback & Defeat
-                    scene.remove(npc.mesh);
-                    kanyeNPCs.splice(i, 1);
-                    score++;
-                    document.getElementById('score-count').innerText = score;
-                    document.getElementById('kanye-count').innerText = kanyeNPCs.length;
+            Object.values(kanyeNPCs).forEach(npc => {
+                if (localGoose.position.distanceTo(npc.mesh.position) <= attackRange) {
+                    socket.emit('hitKanye', npc.id);
                 }
-            }
+            });
         }
 
         function animateMicSword() {
             if (!isAttacking) return;
             attackProgress += 0.15;
-            
-            // Swing slash rotation arc
             micWeaponGroup.rotation.x = 0.2 - Math.sin(attackProgress * Math.PI) * 1.5;
             micWeaponGroup.rotation.y = -0.3 + Math.sin(attackProgress * Math.PI) * 1.2;
-
             if (attackProgress >= 1) {
                 isAttacking = false;
                 micWeaponGroup.rotation.set(0.2, -0.3, -0.2);
@@ -679,65 +492,28 @@
         }
 
         function createHollowBarn() {
-            const barn = new THREE.Group();
-            barn.position.set(60, 0, 60);
-
+            const barn = new THREE.Group(); barn.position.set(60, 0, 60);
             const redMat = createToonMaterial(0xcc2222, THREE.DoubleSide);
             const woodMat = createToonMaterial(0x8b5a2b, THREE.DoubleSide);
             const darkRoofMat = createToonMaterial(0x3a1e05, THREE.DoubleSide);
 
             const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(18, 22), woodMat);
-            floorMesh.rotation.x = -Math.PI / 2;
-            floorMesh.position.y = 0.1;
-            barn.add(floorMesh);
+            floorMesh.rotation.x = -Math.PI / 2; floorMesh.position.y = 0.1; barn.add(floorMesh);
 
-            const sideWallGeo = new THREE.BoxGeometry(0.6, 9, 22);
-            const leftWall = new THREE.Mesh(sideWallGeo, redMat);
-            leftWall.position.set(-9, 4.5, 0);
-            attachOutline(leftWall, 1.02);
-            barn.add(leftWall);
+            const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 9, 22), redMat);
+            leftWall.position.set(-9, 4.5, 0); attachOutline(leftWall, 1.02); barn.add(leftWall);
 
-            const rightWall = new THREE.Mesh(sideWallGeo, redMat);
-            rightWall.position.set(9, 4.5, 0);
-            attachOutline(rightWall, 1.02);
-            barn.add(rightWall);
+            const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 9, 22), redMat);
+            rightWall.position.set(9, 4.5, 0); attachOutline(rightWall, 1.02); barn.add(rightWall);
 
-            const backWallGeo = new THREE.BoxGeometry(18, 9, 0.6);
-            const backWall = new THREE.Mesh(backWallGeo, redMat);
-            backWall.position.set(0, 4.5, 11);
-            attachOutline(backWall, 1.02);
-            barn.add(backWall);
-
-            const frontWallGeo = new THREE.BoxGeometry(6, 9, 0.6);
-            const frontLeft = new THREE.Mesh(frontWallGeo, redMat);
-            frontLeft.position.set(-6, 4.5, -11);
-            attachOutline(frontLeft, 1.02);
-            barn.add(frontLeft);
-
-            const frontRight = new THREE.Mesh(frontWallGeo, redMat);
-            frontRight.position.set(6, 4.5, -11);
-            attachOutline(frontRight, 1.02);
-            barn.add(frontRight);
-
-            const roofGeo = new THREE.BoxGeometry(11, 0.5, 23);
-            const leftRoof = new THREE.Mesh(roofGeo, darkRoofMat);
-            leftRoof.position.set(-4.5, 11, 0);
-            leftRoof.rotation.z = 0.35;
-            attachOutline(leftRoof, 1.02);
-            barn.add(leftRoof);
-
-            const rightRoof = new THREE.Mesh(roofGeo, darkRoofMat);
-            rightRoof.position.set(4.5, 11, 0);
-            rightRoof.rotation.z = -0.35;
-            attachOutline(rightRoof, 1.02);
-            barn.add(rightRoof);
+            const backWall = new THREE.Mesh(new THREE.BoxGeometry(18, 9, 0.6), redMat);
+            backWall.position.set(0, 4.5, 11); attachOutline(backWall, 1.02); barn.add(backWall);
 
             scene.add(barn);
         }
 
         function setupTwoWayPortals() {
             posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 3.2;
-
             renderTargetMeadow = new THREE.WebGLRenderTarget(1024, 1024);
             renderTargetBarn = new THREE.WebGLRenderTarget(1024, 1024);
 
@@ -745,52 +521,27 @@
             portalCamToBarn = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 
             const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
-            const frameMatPink = createToonMaterial(0xff0077);
-            const frameMatBlue = createToonMaterial(0x00f0ff);
             const screenGeo = new THREE.CircleGeometry(2.8, 32);
 
-            portalBarn = new THREE.Group();
-            portalBarn.position.copy(posBarn);
+            portalBarn = new THREE.Group(); portalBarn.position.copy(posBarn);
+            portalBarn.add(new THREE.Mesh(frameGeo, createToonMaterial(0xff0077)));
+            portalBarnScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetMeadow.texture }));
+            portalBarn.add(portalBarnScreen); scene.add(portalBarn);
 
-            const frameB = new THREE.Mesh(frameGeo, frameMatPink);
-            attachOutline(frameB, 1.05);
-            portalBarn.add(frameB);
-
-            portalBarnScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ 
-                map: renderTargetMeadow.texture, 
-                side: THREE.FrontSide 
-            }));
-            portalBarn.add(portalBarnScreen);
-            scene.add(portalBarn);
-
-            portalOutside = new THREE.Group();
-            portalOutside.position.copy(posOutside);
-
-            const frameO = new THREE.Mesh(frameGeo, frameMatBlue);
-            attachOutline(frameO, 1.05);
-            portalOutside.add(frameO);
-
-            portalOutsideScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ 
-                map: renderTargetBarn.texture, 
-                side: THREE.FrontSide 
-            }));
-            portalOutside.add(portalOutsideScreen);
-            scene.add(portalOutside);
+            portalOutside = new THREE.Group(); portalOutside.position.copy(posOutside);
+            portalOutside.add(new THREE.Mesh(frameGeo, createToonMaterial(0x00f0ff)));
+            portalOutsideScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetBarn.texture }));
+            portalOutside.add(portalOutsideScreen); scene.add(portalOutside);
         }
 
         function createTerrain() {
             const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
             floorGeo.rotateX(-Math.PI / 2);
             const pos = floorGeo.attributes.position;
-            for (let i = 0; i < pos.count; i++) {
-                pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
-            }
+            for (let i = 0; i < pos.count; i++) pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             floorGeo.computeVertexNormals();
 
-            let colorHex = 0x38b000;
-            if (currentMap === "desert") colorHex = 0xe9c46a;
-            if (currentMap === "cyber") colorHex = 0x2b0938;
-
+            let colorHex = (currentMap === "desert") ? 0xe9c46a : (currentMap === "cyber") ? 0x2b0938 : 0x38b000;
             scene.add(new THREE.Mesh(floorGeo, createToonMaterial(colorHex)));
         }
 
@@ -829,16 +580,12 @@
 
         function checkPortalTeleport() {
             if (!canTeleport) return;
-
             if (localGoose.position.distanceTo(posBarn) < 2.5) {
                 localGoose.position.set(posOutside.x, getHillHeight(posOutside.x, posOutside.z + 3.5), posOutside.z + 3.5);
-                canTeleport = false;
-                setTimeout(() => canTeleport = true, 1000);
-            }
-            else if (localGoose.position.distanceTo(posOutside) < 2.5) {
+                canTeleport = false; setTimeout(() => canTeleport = true, 1000);
+            } else if (localGoose.position.distanceTo(posOutside) < 2.5) {
                 localGoose.position.set(posBarn.x, 0.1, posBarn.z + 3.5);
-                canTeleport = false;
-                setTimeout(() => canTeleport = true, 1000);
+                canTeleport = false; setTimeout(() => canTeleport = true, 1000);
             }
         }
 
@@ -847,7 +594,9 @@
 
             if (document.activeElement !== document.getElementById('chat-input')) {
                 let moved = false;
-                const moveSpeed = 0.35;
+                
+                // Base speed vs 50% Speed Boost Slide
+                let moveSpeed = isSliding ? 0.525 : 0.35;
 
                 const moveVector = new THREE.Vector3();
                 if (keys['KeyW']) moveVector.z -= 1;
@@ -873,6 +622,7 @@
                 }
 
                 checkPortalTeleport();
+                updateSlide();
 
                 if (moved) {
                     socket.emit('playerMovement', {
