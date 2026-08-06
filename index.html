@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer FPS Goose World - Kanye Edition</title>
+    <title>Multiplayer FPS Goose World - Kanye Attack Edition</title>
     <style>
         body { 
             margin: 0; 
@@ -14,7 +14,7 @@
         }
         #canvas-container { width: 100vw; height: 100vh; cursor: pointer; }
         
-        /* Nickname Overlay Screen */
+        /* Login & Server/Map Screen */
         #login-screen {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(112, 214, 255, 0.95);
@@ -24,17 +24,21 @@
         #login-box {
             background: #ffffff; border: 4px solid #1b4332; border-radius: 16px;
             padding: 30px 40px; text-align: center; box-shadow: 0 10px 0 #1b4332;
+            width: 320px;
         }
-        #login-box h1 { margin-top: 0; color: #1b4332; font-size: 28px; }
-        #nickname-input {
-            width: 80%; padding: 12px; font-size: 16px; font-family: inherit;
-            border: 3px solid #1b4332; border-radius: 8px; margin-bottom: 20px;
-            text-align: center; font-weight: bold; outline: none;
+        #login-box h1 { margin-top: 0; color: #1b4332; font-size: 26px; }
+        .input-group { margin-bottom: 15px; text-align: left; }
+        .input-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #1b4332; }
+        #nickname-input, #map-select {
+            width: 100%; padding: 10px; font-size: 15px; font-family: inherit;
+            border: 3px solid #1b4332; border-radius: 8px; font-weight: bold; outline: none;
+            box-sizing: border-box;
         }
         #play-btn {
             background: #ff477e; color: #ffffff; font-size: 18px; font-weight: bold;
             padding: 12px 28px; border: 3px solid #000; border-radius: 8px;
             cursor: pointer; box-shadow: 0 4px 0 #000; transition: transform 0.1s;
+            width: 100%; margin-top: 10px;
         }
         #play-btn:active { transform: translateY(4px); box-shadow: none; }
 
@@ -50,7 +54,7 @@
         
         #honk-text {
             position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 90px; font-weight: 900; color: #ff477e;
+            font-size: 80px; font-weight: 900; color: #ff477e;
             text-shadow: 5px 5px 0px #000, -5px -5px 0px #000, 5px -5px 0px #000, -5px 5px 0px #000;
             opacity: 0; transition: opacity 0.1s ease-in-out; pointer-events: none;
         }
@@ -63,7 +67,7 @@
         #crosshair {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 6px; height: 6px; background: #ffffff;
+            width: 8px; height: 8px; background: #ff477e;
             border: 2px solid #000000; border-radius: 50%; pointer-events: none;
         }
 
@@ -91,27 +95,38 @@
 
     <div id="login-screen">
         <div id="login-box">
-            <h1>🪿 JOIN THE SQUAD</h1>
-            <input type="text" id="nickname-input" placeholder="Enter Goose Name..." maxlength="12" />
-            <br>
-            <button id="play-btn" onclick="joinGame()">HONK & PLAY!</button>
+            <h1>🪿 GOOSE VS YE</h1>
+            <div class="input-group">
+                <label for="nickname-input">Goose Name:</label>
+                <input type="text" id="nickname-input" placeholder="Enter Goose Name..." maxlength="12" value="Goose" />
+            </div>
+            <div class="input-group">
+                <label for="map-select">Select Map / Arena:</label>
+                <select id="map-select">
+                    <option value="meadow">🌿 Meadow Hills</option>
+                    <option value="desert">🏜️ Desert Wasteland</option>
+                    <option value="cyber">🌆 Cyber Neon Grid</option>
+                </select>
+            </div>
+            <button id="play-btn" onclick="joinGame()">EQUIP MIC & PLAY!</button>
         </div>
     </div>
 
     <div id="canvas-container"></div>
     <div id="crosshair"></div>
     <div id="hud">
-        <h1>🪿 FPS Goose Squad</h1>
+        <h1>🎙️ Mic Melee FPS</h1>
         <p>Active Geese: <span id="geese-count">1</span></p>
-        <p>Kanye Count: <span id="kanye-count">0</span></p>
+        <p>Hostile Kanyes: <span id="kanye-count">0</span></p>
+        <p>Kanyes Defeated: <span id="score-count">0</span></p>
     </div>
-    <div id="honk-text">HONK!</div>
+    <div id="honk-text">MIC SLAM!</div>
     <div id="controls">
         <b>CLICK SCREEN TO LOCK MOUSE</b><br>
         [W, A, S, D] : Walk<br>
         [SPACE] : Jump<br>
-        [E / LEFT CLICK] : HONK!<br>
-        [K] : SPAWN KANYE<br>
+        [LEFT CLICK / E] : Mic Sword Attack!<br>
+        [K] : SPAWN HOSTILE KANYE<br>
         [T / ENTER] : Open Chat
     </div>
 
@@ -122,7 +137,7 @@
 
     <script>
         let scene, mainCamera, renderer, socket;
-        let localGoose, pitchObject;
+        let localGoose, pitchObject, micWeaponGroup;
         let otherGeese = {};
         let kanyeNPCs = [];
         let kanyeTexture;
@@ -130,8 +145,12 @@
         let toonGradientMap;
         const terrainSize = 450;
         let playerNickname = "Goose";
+        let currentMap = "meadow";
+        let score = 0;
 
-        // FPS Physics
+        // Weapon Animation & Physics
+        let isAttacking = false;
+        let attackProgress = 0;
         let isPointerLocked = false;
         let velocityY = 0;
         let isGrounded = true;
@@ -149,6 +168,8 @@
         const posBarn = new THREE.Vector3(60, 3.2, 60);
 
         function getHillHeight(x, z) {
+            if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
+            if (currentMap === "cyber") return 0; // Flat neon arena
             if (Math.hypot(x - 60, z - 60) < 22) return 0.05; 
             const h1 = Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
             const h2 = Math.sin((x + z) * 0.015) * 10.0;
@@ -168,6 +189,40 @@
             const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
             outlineMesh.scale.set(outlineScale, outlineScale, outlineScale);
             mesh.add(outlineMesh);
+        }
+
+        /* --- 🎙️ MICROPHONE SWORD WEAPON BUILDER --- */
+        function createMicrophoneWeapon() {
+            const micGroup = new THREE.Group();
+
+            // Metallic Handle
+            const handleGeo = new THREE.CylinderGeometry(0.04, 0.03, 0.8, 12);
+            const handleMat = createToonMaterial(0x222222);
+            const handle = new THREE.Mesh(handleGeo, handleMat);
+            handle.position.y = 0.2;
+            attachOutline(handle, 1.1);
+            micGroup.add(handle);
+
+            // Silver Ring
+            const ringGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12);
+            const ringMat = createToonMaterial(0xcccccc);
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.position.y = 0.55;
+            micGroup.add(ring);
+
+            // Microphone Mesh/Grille Head
+            const headGeo = new THREE.SphereGeometry(0.09, 14, 14);
+            const headMat = createToonMaterial(0xdddddd);
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 0.65;
+            attachOutline(head, 1.12);
+            micGroup.add(head);
+
+            // Position in First-Person view (Right hand stance)
+            micGroup.position.set(0.4, -0.3, -0.6);
+            micGroup.rotation.set(0.2, -0.3, -0.2);
+
+            return micGroup;
         }
 
         function createNametagSprite(nickname) {
@@ -230,7 +285,7 @@
             return { group, headGroup };
         }
 
-        /* --- KANYE WEST NPC SYSTEM --- */
+        /* --- KANYE WEST HOSTILE NPC SYSTEM --- */
         function createKanyeHeadTextureFallback() {
             const canvas = document.createElement('canvas');
             canvas.width = 128; canvas.height = 128;
@@ -254,7 +309,6 @@
         function spawnKanyeNPC(x, z) {
             const group = new THREE.Group();
 
-            // Toon Suit Body
             const bodyGeo = new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10);
             const bodyMat = createToonMaterial(0x111111);
             const body = new THREE.Mesh(bodyGeo, bodyMat);
@@ -262,15 +316,13 @@
             attachOutline(body, 1.08);
             group.add(body);
 
-            // Kanye Head Sprite
             const spriteMat = new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true });
             const headSprite = new THREE.Sprite(spriteMat);
             headSprite.scale.set(2.5, 2.5, 1);
             headSprite.position.y = 2.8;
             group.add(headSprite);
 
-            // Kanye Nametag
-            const tag = createNametagSprite("YE");
+            const tag = createNametagSprite("HOSTILE YE");
             tag.position.y = 4.2;
             group.add(tag);
 
@@ -280,31 +332,44 @@
 
             const npc = {
                 mesh: group,
-                targetX: x,
-                targetZ: z,
-                speed: 0.08 + Math.random() * 0.06,
-                timer: 0
+                speed: 0.12 + Math.random() * 0.05, // Fast hostile speed
+                health: 100
             };
 
             kanyeNPCs.push(npc);
             document.getElementById('kanye-count').innerText = kanyeNPCs.length;
         }
 
+        /* HOSTILE AI: Chases nearest player immediately */
         function updateKanyeNPCs() {
-            kanyeNPCs.forEach(npc => {
-                const pos = npc.mesh.position;
-                const dist = Math.hypot(npc.targetX - pos.x, npc.targetZ - pos.z);
+            const allPlayers = [localGoose.position];
+            Object.values(otherGeese).forEach(og => {
+                if (og && og.group) allPlayers.push(og.group.position);
+            });
 
-                if (dist < 1.5 || npc.timer <= 0) {
-                    npc.targetX = (Math.random() - 0.5) * (terrainSize - 60);
-                    npc.targetZ = (Math.random() - 0.5) * (terrainSize - 60);
-                    npc.timer = Math.floor(Math.random() * 300) + 200;
-                } else {
-                    npc.timer--;
-                    const angle = Math.atan2(npc.targetX - pos.x, npc.targetZ - pos.z);
+            kanyeNPCs.forEach((npc, index) => {
+                const pos = npc.mesh.position;
+                
+                // Find nearest player target
+                let nearestPlayerPos = null;
+                let minDistSq = Infinity;
+
+                allPlayers.forEach(pPos => {
+                    const dx = pPos.x - pos.x;
+                    const dz = pPos.z - pos.z;
+                    const distSq = dx * dx + dz * dz;
+                    if (distSq < minDistSq) {
+                        minDistSq = distSq;
+                        nearestPlayerPos = pPos;
+                    }
+                });
+
+                if (nearestPlayerPos) {
+                    const angle = Math.atan2(nearestPlayerPos.x - pos.x, nearestPlayerPos.z - pos.z);
                     pos.x += Math.sin(angle) * npc.speed;
                     pos.z += Math.cos(angle) * npc.speed;
                     pos.y = getHillHeight(pos.x, pos.z);
+                    npc.mesh.rotation.y = angle;
                 }
             });
         }
@@ -324,7 +389,7 @@
             attachOutline(trunk, 1.1);
             tree.add(trunk);
 
-            const greenShades = [0x2b9348, 0x55a630, 0x80b918, 0x155d27];
+            const greenShades = currentMap === "desert" ? [0xd4a373, 0xccd5ae] : [0x2b9348, 0x55a630, 0x80b918];
             const leafMat = createToonMaterial(greenShades[Math.floor(Math.random() * greenShades.length)]);
 
             for (let i = 0; i < 3; i++) {
@@ -339,7 +404,8 @@
         }
 
         function generateForest() {
-            for (let i = 0; i < 280; i++) {
+            if (currentMap === "cyber") return;
+            for (let i = 0; i < 240; i++) {
                 const x = (Math.random() - 0.5) * (terrainSize - 40);
                 const z = (Math.random() - 0.5) * (terrainSize - 40);
                 if (Math.hypot(x - 60, z - 60) > 25 && Math.hypot(x, z) > 12) {
@@ -353,14 +419,32 @@
             if (input.value.trim() !== "") {
                 playerNickname = input.value.trim();
             }
+            currentMap = document.getElementById('map-select').value;
             document.getElementById('login-screen').style.display = 'none';
             
+            applyMapTheme();
+
             const container = document.getElementById('canvas-container');
             container.requestPointerLock();
             
             if (socket) {
                 socket.emit('setNickname', playerNickname);
             }
+        }
+
+        function applyMapTheme() {
+            if (currentMap === "desert") {
+                scene.background = new THREE.Color(0xf2cc8f);
+                scene.fog.color = new THREE.Color(0xf2cc8f);
+            } else if (currentMap === "cyber") {
+                scene.background = new THREE.Color(0x0d0221);
+                scene.fog.color = new THREE.Color(0x0d0221);
+            } else {
+                scene.background = new THREE.Color(0x70d6ff);
+                scene.fog.color = new THREE.Color(0x70d6ff);
+            }
+            createTerrain();
+            generateForest();
         }
 
         function init() {
@@ -375,7 +459,12 @@
             localGoose = new THREE.Group();
             pitchObject = new THREE.Group();
             pitchObject.position.y = 1.6;
+            
+            // Attach Camera & Microphone Sword to local Goose View
             pitchObject.add(mainCamera);
+            micWeaponGroup = createMicrophoneWeapon();
+            pitchObject.add(micWeaponGroup);
+
             localGoose.add(pitchObject);
             scene.add(localGoose);
 
@@ -413,7 +502,7 @@
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
-            // Load Kanye image from project directory
+            // Load Kanye Image Texture
             const textureLoader = new THREE.TextureLoader();
             kanyeTexture = textureLoader.load(
                 'kanye.png',
@@ -427,15 +516,13 @@
             dirLight.position.set(100, 120, 50);
             scene.add(dirLight);
 
-            createTerrain();
-            generateForest();
             createHollowBarn();
             setupTwoWayPortals();
 
-            // Initial Kanye Squad Spawner
-            for (let i = 0; i < 20; i++) {
-                const rx = (Math.random() - 0.5) * (terrainSize - 80);
-                const rz = (Math.random() - 0.5) * (terrainSize - 80);
+            // Initial Hostile Kanye Squad
+            for (let i = 0; i < 15; i++) {
+                const rx = (Math.random() - 0.5) * (terrainSize - 100);
+                const rz = (Math.random() - 0.5) * (terrainSize - 100);
                 spawnKanyeNPC(rx, rz);
             }
 
@@ -504,7 +591,7 @@
                 }
 
                 if (e.code === 'KeyK') {
-                    const dir = new THREE.Vector3(0, 0, -5).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+                    const dir = new THREE.Vector3(0, 0, -6).applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
                     spawnKanyeNPC(localGoose.position.x + dir.x, localGoose.position.z + dir.z);
                 }
 
@@ -513,20 +600,62 @@
                     isGrounded = false;
                 }
                 if (e.code === 'KeyE') {
-                    honk();
-                    socket.emit('honk');
+                    performMicAttack();
                 }
             });
             
             window.addEventListener('keyup', (e) => { keys[e.code] = false; });
             window.addEventListener('mousedown', (e) => {
                 if (isPointerLocked && e.button === 0) {
-                    honk();
-                    socket.emit('honk');
+                    performMicAttack();
                 }
             });
 
             animate();
+        }
+
+        /* 🎙️ MELEE ATTACK LOGIC */
+        function performMicAttack() {
+            if (isAttacking) return;
+            isAttacking = true;
+            attackProgress = 0;
+
+            const honkUI = document.getElementById('honk-text');
+            honkUI.innerText = "MIC SLAM!";
+            honkUI.style.opacity = '1';
+            setTimeout(() => { honkUI.style.opacity = '0'; }, 250);
+
+            if (socket) socket.emit('honk');
+
+            // Hit Detection: Check Kanyes in front of player
+            const attackRange = 5.0;
+            for (let i = kanyeNPCs.length - 1; i >= 0; i--) {
+                const npc = kanyeNPCs[i];
+                const dist = localGoose.position.distanceTo(npc.mesh.position);
+                
+                if (dist <= attackRange) {
+                    // Knockback & Defeat
+                    scene.remove(npc.mesh);
+                    kanyeNPCs.splice(i, 1);
+                    score++;
+                    document.getElementById('score-count').innerText = score;
+                    document.getElementById('kanye-count').innerText = kanyeNPCs.length;
+                }
+            }
+        }
+
+        function animateMicSword() {
+            if (!isAttacking) return;
+            attackProgress += 0.15;
+            
+            // Swing slash rotation arc
+            micWeaponGroup.rotation.x = 0.2 - Math.sin(attackProgress * Math.PI) * 1.5;
+            micWeaponGroup.rotation.y = -0.3 + Math.sin(attackProgress * Math.PI) * 1.2;
+
+            if (attackProgress >= 1) {
+                isAttacking = false;
+                micWeaponGroup.rotation.set(0.2, -0.3, -0.2);
+            }
         }
 
         function sendChatMessage() {
@@ -657,7 +786,12 @@
                 pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             }
             floorGeo.computeVertexNormals();
-            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(0x38b000)));
+
+            let colorHex = 0x38b000;
+            if (currentMap === "desert") colorHex = 0xe9c46a;
+            if (currentMap === "cyber") colorHex = 0x2b0938;
+
+            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(colorHex)));
         }
 
         function addOtherPlayer(info) {
@@ -669,12 +803,6 @@
 
         function updatePlayerCount() {
             document.getElementById('geese-count').innerText = Object.keys(otherGeese).length + 1;
-        }
-
-        function honk() {
-            const honkUI = document.getElementById('honk-text');
-            honkUI.style.opacity = '1';
-            setTimeout(() => { honkUI.style.opacity = '0'; }, 300);
         }
 
         function updatePortalCameras() {
@@ -755,6 +883,7 @@
                 }
             }
 
+            animateMicSword();
             updateKanyeNPCs();
             updatePortalCameras();
             renderer.render(scene, mainCamera);
