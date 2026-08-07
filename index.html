@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplayer FPS Goose World - Synced Kanyes & Slide</title>
+    <title>Goose World - Stage Arena & Kanye Ground</title>
     <style>
         body { 
             margin: 0; 
@@ -92,20 +92,20 @@
 
     <div id="login-screen">
         <div id="login-box">
-            <h1>🪿 GOOSE VS YE</h1>
+            <h1>🪿 STAGE SHOWDOWN</h1>
             <div class="input-group">
                 <label for="nickname-input">Goose Name:</label>
                 <input type="text" id="nickname-input" placeholder="Enter Goose Name..." maxlength="12" value="Goose" />
             </div>
             <div class="input-group">
-                <label for="map-select">Select Map / Arena:</label>
+                <label for="map-select">Select Atmosphere:</label>
                 <select id="map-select">
-                    <option value="meadow">🌿 Meadow Hills</option>
-                    <option value="desert">🏜️ Desert Wasteland</option>
-                    <option value="cyber">🌆 Cyber Neon Grid</option>
+                    <option value="meadow">🌿 Kanye Meadow</option>
+                    <option value="desert">🏜️ Desert Ye</option>
+                    <option value="cyber">🌆 Cyber Ye</option>
                 </select>
             </div>
-            <button id="play-btn" onclick="joinGame()">EQUIP MIC & PLAY!</button>
+            <button id="play-btn" onclick="joinGame()">TAKE THE STAGE!</button>
         </div>
     </div>
 
@@ -123,7 +123,7 @@
         [W, A, S, D] : Walk<br>
         [C / CTRL] : 50% Speed Boost Slide<br>
         [SPACE] : Jump<br>
-        [LEFT CLICK / E] : Mic Sword Attack!<br>
+        [LEFT CLICK / E] : Mic Attack!<br>
         [T / ENTER] : Open Chat
     </div>
 
@@ -137,7 +137,7 @@
         let localGoose, pitchObject, micWeaponGroup;
         let otherGeese = {};
         let kanyeNPCs = {};
-        let kanyeTexture;
+        let kanyeTexture, kanyeTileTexture;
         let keys = {};
         let toonGradientMap;
         const terrainSize = 450;
@@ -156,18 +156,10 @@
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        // Portals
-        let portalBarn, portalBarnScreen, portalOutside, portalOutsideScreen;
-        let portalCamToMeadow, renderTargetMeadow, portalCamToBarn, renderTargetBarn;
-        let canTeleport = true;
-
-        const posOutside = new THREE.Vector3(0, 0, 15);
-        const posBarn = new THREE.Vector3(60, 3.2, 60);
-
         function getHillHeight(x, z) {
+            if (Math.hypot(x, z) < 35) return 0; // Flat area for stage center
             if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
             if (currentMap === "cyber") return 0;
-            if (Math.hypot(x - 60, z - 60) < 22) return 0.05; 
             return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
         }
 
@@ -243,13 +235,18 @@
             return { group, headGroup };
         }
 
-        function createKanyeHeadTextureFallback() {
+        function createKanyeFallbackTexture() {
             const canvas = document.createElement('canvas');
             canvas.width = 128; canvas.height = 128;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#8d5524'; ctx.beginPath(); ctx.arc(64, 64, 50, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = '#111'; ctx.fillRect(25, 45, 32, 22); ctx.fillRect(71, 45, 32, 22);
-            return new THREE.CanvasTexture(canvas);
+            ctx.fillStyle = '#8d5524'; ctx.fillRect(0, 0, 128, 128);
+            ctx.fillStyle = '#111'; ctx.fillRect(20, 30, 35, 25); ctx.fillRect(73, 30, 35, 25);
+            ctx.fillStyle = '#ff477e'; ctx.fillRect(35, 80, 58, 15);
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(50, 50);
+            return tex;
         }
 
         function spawnKanyeMesh(kData) {
@@ -309,6 +306,8 @@
             scene.background = new THREE.Color(color);
             scene.fog.color = new THREE.Color(color);
             createTerrain();
+            createTrees();
+            createConcertStage();
         }
 
         function init() {
@@ -361,17 +360,24 @@
             toonGradientMap.minFilter = THREE.NearestFilter;
             toonGradientMap.magFilter = THREE.NearestFilter;
 
-            kanyeTexture = new THREE.TextureLoader().load('kanye.png', undefined, undefined, () => { kanyeTexture = createKanyeHeadTextureFallback(); });
+            const loader = new THREE.TextureLoader();
+            kanyeTexture = loader.load('kanye.png', (tex) => {
+                kanyeTileTexture = tex.clone();
+                kanyeTileTexture.wrapS = THREE.RepeatWrapping;
+                kanyeTileTexture.wrapT = THREE.RepeatWrapping;
+                kanyeTileTexture.repeat.set(50, 50);
+                kanyeTileTexture.needsUpdate = true;
+            }, undefined, () => { 
+                kanyeTexture = createKanyeFallbackTexture();
+                kanyeTileTexture = kanyeTexture;
+            });
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
             const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
             dirLight.position.set(100, 120, 50);
             scene.add(dirLight);
 
-            createHollowBarn();
-            setupTwoWayPortals();
-
-            // Socket Listeners for Synced Enemies & Players
+            // Socket Listeners
             socket.on('currentPlayers', (players) => {
                 Object.keys(players).forEach(id => { if (id !== socket.id) addOtherPlayer(players[id]); });
                 updatePlayerCount();
@@ -424,16 +430,16 @@
             animate();
         }
 
-        /* 💨 SLIDE MECHANIC */
+        /* 💨 SLIDE MECHANIC (50% Speed Boost) */
         function startSlide() {
             isSliding = true;
-            slideTimer = 35; // Frames of slide duration
+            slideTimer = 35;
         }
 
         function updateSlide() {
             if (!isSliding) return;
             slideTimer--;
-            pitchObject.position.y = 0.8; // Lower stance/POV height
+            pitchObject.position.y = 0.8;
             if (slideTimer <= 0) {
                 isSliding = false;
                 pitchObject.position.y = 1.6;
@@ -491,49 +497,77 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function createHollowBarn() {
-            const barn = new THREE.Group(); barn.position.set(60, 0, 60);
-            const redMat = createToonMaterial(0xcc2222, THREE.DoubleSide);
-            const woodMat = createToonMaterial(0x8b5a2b, THREE.DoubleSide);
-            const darkRoofMat = createToonMaterial(0x3a1e05, THREE.DoubleSide);
+        /* 🎪 CONCERT STAGE */
+        function createConcertStage() {
+            const stageGroup = new THREE.Group();
+            stageGroup.position.set(0, 0, 0);
 
-            const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(18, 22), woodMat);
-            floorMesh.rotation.x = -Math.PI / 2; floorMesh.position.y = 0.1; barn.add(floorMesh);
+            const platformGeo = new THREE.BoxGeometry(32, 3, 20);
+            const platformMat = createToonMaterial(0x1a1a1a);
+            const platform = new THREE.Mesh(platformGeo, platformMat);
+            platform.position.y = 1.5;
+            attachOutline(platform, 1.02);
+            stageGroup.add(platform);
 
-            const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 9, 22), redMat);
-            leftWall.position.set(-9, 4.5, 0); attachOutline(leftWall, 1.02); barn.add(leftWall);
+            const backdropGeo = new THREE.BoxGeometry(32, 14, 0.6);
+            const backdropMat = createToonMaterial(0x0a0a0a);
+            const backdrop = new THREE.Mesh(backdropGeo, backdropMat);
+            backdrop.position.set(0, 10, -9.5);
+            attachOutline(backdrop, 1.02);
+            stageGroup.add(backdrop);
 
-            const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 9, 22), redMat);
-            rightWall.position.set(9, 4.5, 0); attachOutline(rightWall, 1.02); barn.add(rightWall);
+            const speakerMat = createToonMaterial(0x222222);
+            const speakerLeft = new THREE.Mesh(new THREE.BoxGeometry(5, 10, 4), speakerMat);
+            speakerLeft.position.set(-13, 8, -7);
+            attachOutline(speakerLeft, 1.05);
+            stageGroup.add(speakerLeft);
 
-            const backWall = new THREE.Mesh(new THREE.BoxGeometry(18, 9, 0.6), redMat);
-            backWall.position.set(0, 4.5, 11); attachOutline(backWall, 1.02); barn.add(backWall);
+            const speakerRight = speakerLeft.clone();
+            speakerRight.position.set(13, 8, -7);
+            stageGroup.add(speakerRight);
 
-            scene.add(barn);
+            const micStand = new THREE.Group();
+            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3, 8), createToonMaterial(0xcccccc));
+            pole.position.y = 4.5;
+            micStand.add(pole);
+            micStand.position.set(0, 0, -2);
+            stageGroup.add(micStand);
+
+            scene.add(stageGroup);
         }
 
-        function setupTwoWayPortals() {
-            posOutside.y = getHillHeight(posOutside.x, posOutside.z) + 3.2;
-            renderTargetMeadow = new THREE.WebGLRenderTarget(1024, 1024);
-            renderTargetBarn = new THREE.WebGLRenderTarget(1024, 1024);
+        /* 🌲 TREES */
+        function createTrees() {
+            const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 3, 6);
+            const leavesGeo = new THREE.ConeGeometry(2.5, 7, 6);
+            const trunkMat = createToonMaterial(0x5c3d2e);
+            const leavesMat = createToonMaterial(0x2d6a4f);
 
-            portalCamToMeadow = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
-            portalCamToBarn = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
+            for (let i = 0; i < 65; i++) {
+                const tx = (Math.random() - 0.5) * 360;
+                const tz = (Math.random() - 0.5) * 360;
 
-            const frameGeo = new THREE.TorusGeometry(3, 0.3, 12, 24);
-            const screenGeo = new THREE.CircleGeometry(2.8, 32);
+                if (Math.hypot(tx, tz) < 35) continue;
 
-            portalBarn = new THREE.Group(); portalBarn.position.copy(posBarn);
-            portalBarn.add(new THREE.Mesh(frameGeo, createToonMaterial(0xff0077)));
-            portalBarnScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetMeadow.texture }));
-            portalBarn.add(portalBarnScreen); scene.add(portalBarn);
+                const ty = getHillHeight(tx, tz);
+                const treeGroup = new THREE.Group();
+                treeGroup.position.set(tx, ty, tz);
 
-            portalOutside = new THREE.Group(); portalOutside.position.copy(posOutside);
-            portalOutside.add(new THREE.Mesh(frameGeo, createToonMaterial(0x00f0ff)));
-            portalOutsideScreen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: renderTargetBarn.texture }));
-            portalOutside.add(portalOutsideScreen); scene.add(portalOutside);
+                const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+                trunk.position.y = 1.5;
+                attachOutline(trunk, 1.08);
+                treeGroup.add(trunk);
+
+                const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+                leaves.position.y = 5;
+                attachOutline(leaves, 1.08);
+                treeGroup.add(leaves);
+
+                scene.add(treeGroup);
+            }
         }
 
+        /* 🖼️ TILING KANYE TERRAIN */
         function createTerrain() {
             const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
             floorGeo.rotateX(-Math.PI / 2);
@@ -541,8 +575,12 @@
             for (let i = 0; i < pos.count; i++) pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             floorGeo.computeVertexNormals();
 
-            let colorHex = (currentMap === "desert") ? 0xe9c46a : (currentMap === "cyber") ? 0x2b0938 : 0x38b000;
-            scene.add(new THREE.Mesh(floorGeo, createToonMaterial(colorHex)));
+            const groundMat = new THREE.MeshToonMaterial({
+                map: kanyeTileTexture || kanyeTexture,
+                gradientMap: toonGradientMap
+            });
+
+            scene.add(new THREE.Mesh(floorGeo, groundMat));
         }
 
         function addOtherPlayer(info) {
@@ -556,46 +594,11 @@
             document.getElementById('geese-count').innerText = Object.keys(otherGeese).length + 1;
         }
 
-        function updatePortalCameras() {
-            portalCamToMeadow.position.copy(posOutside);
-            portalCamToMeadow.rotation.y = localGoose.rotation.y;
-            portalCamToMeadow.rotation.x = pitchObject.rotation.x;
-
-            portalBarnScreen.visible = false;
-            renderer.setRenderTarget(renderTargetMeadow);
-            renderer.render(scene, portalCamToMeadow);
-            portalBarnScreen.visible = true;
-
-            portalCamToBarn.position.copy(posBarn);
-            portalCamToBarn.rotation.y = localGoose.rotation.y;
-            portalCamToBarn.rotation.x = pitchObject.rotation.x;
-
-            portalOutsideScreen.visible = false;
-            renderer.setRenderTarget(renderTargetBarn);
-            renderer.render(scene, portalCamToBarn);
-            portalOutsideScreen.visible = true;
-
-            renderer.setRenderTarget(null);
-        }
-
-        function checkPortalTeleport() {
-            if (!canTeleport) return;
-            if (localGoose.position.distanceTo(posBarn) < 2.5) {
-                localGoose.position.set(posOutside.x, getHillHeight(posOutside.x, posOutside.z + 3.5), posOutside.z + 3.5);
-                canTeleport = false; setTimeout(() => canTeleport = true, 1000);
-            } else if (localGoose.position.distanceTo(posOutside) < 2.5) {
-                localGoose.position.set(posBarn.x, 0.1, posBarn.z + 3.5);
-                canTeleport = false; setTimeout(() => canTeleport = true, 1000);
-            }
-        }
-
         function animate() {
             requestAnimationFrame(animate);
 
             if (document.activeElement !== document.getElementById('chat-input')) {
                 let moved = false;
-                
-                // Base speed vs 50% Speed Boost Slide
                 let moveSpeed = isSliding ? 0.525 : 0.35;
 
                 const moveVector = new THREE.Vector3();
@@ -621,7 +624,6 @@
                     isGrounded = true;
                 }
 
-                checkPortalTeleport();
                 updateSlide();
 
                 if (moved) {
@@ -635,7 +637,6 @@
 
             animateMicSword();
             updateKanyeNPCs();
-            updatePortalCameras();
             renderer.render(scene, mainCamera);
         }
 
