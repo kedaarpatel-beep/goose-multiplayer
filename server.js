@@ -9,7 +9,15 @@ let players = {};
 let kanyes = {};
 let nextKanyeId = 1;
 
-// Server-side Kanye Spawner (Spawns a hostile Kanye every 5 seconds)
+let trumpState = {
+    x: -150,
+    z: -150,
+    hp: 500,
+    maxHp: 500,
+    active: false
+};
+
+// Server-side Kanye Spawner
 setInterval(() => {
     if (Object.keys(players).length > 0) {
         const id = 'kanye_' + nextKanyeId++;
@@ -27,11 +35,13 @@ io.on('connection', (socket) => {
         z: 25 + Math.random() * 10,
         rotation: 0,
         nickname: "Goose",
-        color: Math.random() * 0xffffff
+        color: Math.random() * 0xffffff,
+        hp: 100
     };
 
     socket.emit('currentPlayers', players);
     socket.emit('currentKanyes', kanyes);
+    socket.emit('trumpState', trumpState);
     socket.broadcast.emit('newPlayer', players[socket.id]);
 
     socket.on('setNickname', (nickname) => {
@@ -59,6 +69,28 @@ io.on('connection', (socket) => {
         if (kanyes[kanyeId]) {
             delete kanyes[kanyeId];
             io.emit('kanyeDefeated', { id: kanyeId, attackerId: socket.id });
+        }
+    });
+
+    socket.on('triggerTrumpBoss', () => {
+        trumpState.active = true;
+        io.emit('trumpBossActivated', trumpState);
+    });
+
+    socket.on('hitTrump', (damage) => {
+        if (trumpState.hp > 0) {
+            trumpState.hp = Math.max(0, trumpState.hp - damage);
+            io.emit('trumpHPUpdate', { hp: trumpState.hp, maxHp: trumpState.maxHp });
+            if (trumpState.hp === 0) {
+                io.emit('trumpDefeated');
+            }
+        }
+    });
+
+    socket.on('playerTakeDamage', (damage) => {
+        if (players[socket.id]) {
+            players[socket.id].hp = Math.max(0, players[socket.id].hp - damage);
+            socket.emit('yourHPUpdate', players[socket.id].hp);
         }
     });
 
