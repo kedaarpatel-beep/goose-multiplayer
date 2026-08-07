@@ -23,14 +23,13 @@ setInterval(() => {
 io.on('connection', (socket) => {
     players[socket.id] = {
         id: socket.id,
-        x: 0,
-        z: 0,
+        x: (Math.random() - 0.5) * 20,
+        z: 25 + Math.random() * 10,
         rotation: 0,
         nickname: "Goose",
         color: Math.random() * 0xffffff
     };
 
-    // Send existing state to new player
     socket.emit('currentPlayers', players);
     socket.emit('currentKanyes', kanyes);
     socket.broadcast.emit('newPlayer', players[socket.id]);
@@ -56,7 +55,6 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('chatMessage', data);
     });
 
-    // Handle Mic Attack / Enemy Defeat Sync
     socket.on('hitKanye', (kanyeId) => {
         if (kanyes[kanyeId]) {
             delete kanyes[kanyeId];
