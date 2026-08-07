@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goose World - Stage Arena & Kanye Ground</title>
+    <title>Goose World - Cave & Trump Boss Battle</title>
     <style>
         body { 
             margin: 0; 
@@ -50,6 +50,39 @@
         #hud h1 { margin: 0 0 5px 0; font-size: 20px; text-transform: uppercase; }
         #hud p { margin: 3px 0; font-size: 14px; font-weight: bold; }
         
+        #player-hp-bar-container {
+            width: 180px; height: 16px; background: #333; border: 2px solid #000;
+            border-radius: 8px; margin-top: 6px; overflow: hidden;
+        }
+        #player-hp-fill {
+            width: 100%; height: 100%; background: #2ec4b6; transition: width 0.2s;
+        }
+
+        #boss-hp-container {
+            position: absolute; top: 25px; left: 50%; transform: translateX(-50%);
+            width: 550px; background: rgba(0, 0, 0, 0.85); border: 4px solid #ff477e;
+            border-radius: 12px; padding: 12px 20px; text-align: center; color: #fff;
+            display: none; box-shadow: 0 0 20px rgba(255, 71, 126, 0.6); pointer-events: none;
+            z-index: 20;
+        }
+        #boss-name { font-size: 22px; font-weight: 900; letter-spacing: 2px; color: #ffe600; margin-bottom: 6px; }
+        #boss-hp-bar {
+            width: 100%; height: 22px; background: #222; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
+        }
+        #boss-hp-fill { width: 100%; height: 100%; background: #e63946; transition: width 0.15s; }
+
+        #cutscene-overlay {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            pointer-events: none; display: flex; flex-direction: column;
+            justify-content: space-between; align-items: center; z-index: 30; opacity: 0;
+            transition: opacity 0.5s;
+        }
+        .cutscene-bar { width: 100%; height: 12vh; background: #000; }
+        #cutscene-title {
+            color: #ffe600; font-size: 42px; font-weight: 900; text-shadow: 4px 4px 0 #000;
+            letter-spacing: 3px; text-align: center;
+        }
+
         #honk-text {
             position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
             font-size: 80px; font-weight: 900; color: #ff477e;
@@ -109,6 +142,17 @@
         </div>
     </div>
 
+    <div id="cutscene-overlay">
+        <div class="cutscene-bar"></div>
+        <div id="cutscene-title">⚠️ FINAL BOSS: DONALD TRUMP ⚠️</div>
+        <div class="cutscene-bar"></div>
+    </div>
+
+    <div id="boss-hp-container">
+        <div id="boss-name">DONALD TRUMP</div>
+        <div id="boss-hp-bar"><div id="boss-hp-fill"></div></div>
+    </div>
+
     <div id="canvas-container"></div>
     <div id="crosshair"></div>
     <div id="hud">
@@ -116,6 +160,8 @@
         <p>Active Geese: <span id="geese-count">1</span></p>
         <p>Hostile Kanyes: <span id="kanye-count">0</span></p>
         <p>Kanyes Defeated: <span id="score-count">0</span></p>
+        <p>Goose Health:</p>
+        <div id="player-hp-bar-container"><div id="player-hp-fill"></div></div>
     </div>
     <div id="honk-text">MIC SLAM!</div>
     <div id="controls">
@@ -144,6 +190,7 @@
         let playerNickname = "Goose";
         let currentMap = "meadow";
         let score = 0;
+        let playerHP = 100;
 
         // Mechanics & Physics
         let isAttacking = false;
@@ -156,8 +203,20 @@
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
+        // Cave & Trump Boss Logic
+        const cavePosition = new THREE.Vector3(-140, 0, -140);
+        let trumpMeshGroup = null;
+        let trumpHP = 500;
+        let trumpMaxHP = 500;
+        let isTrumpActive = false;
+        let inCutscene = false;
+        let cutsceneTimer = 0;
+        let cutsceneTriggered = false;
+        let lastDamageTime = 0;
+
         function getHillHeight(x, z) {
-            if (Math.hypot(x, z) < 35) return 0; // Flat area for stage center
+            if (Math.hypot(x, z) < 35) return 0;
+            if (Math.hypot(x - cavePosition.x, z - cavePosition.z) < 30) return 0;
             if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
             if (currentMap === "cyber") return 0;
             return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
@@ -235,6 +294,99 @@
             return { group, headGroup };
         }
 
+        /* 🏛️ CAVE & DONALD TRUMP MODEL */
+        function createCaveAndTrump() {
+            // Cave Structure
+            const caveGroup = new THREE.Group();
+            caveGroup.position.copy(cavePosition);
+
+            const rockMat = createToonMaterial(0x3a3a3a, THREE.DoubleSide);
+            const outerDome = new THREE.Mesh(new THREE.SphereGeometry(22, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2), rockMat);
+            outerDome.scale.set(1.2, 0.8, 1.2);
+            attachOutline(outerDome, 1.02);
+            caveGroup.add(outerDome);
+
+            // Entrance Tunnel cutout framing
+            const entranceArch = new THREE.Mesh(new THREE.TorusGeometry(8, 2.5, 8, 16, Math.PI), rockMat);
+            entranceArch.position.set(0, 0, 18);
+            attachOutline(entranceArch, 1.05);
+            caveGroup.add(entranceArch);
+
+            scene.add(caveGroup);
+
+            // Donald Trump Boss: Capsule body + Yellow Cuboid Hair
+            trumpMeshGroup = new THREE.Group();
+            
+            // Capsule Body (Navy Suit)
+            const bodyGeo = new THREE.CylinderGeometry(1.6, 1.6, 5.5, 16);
+            const bodyMat = createToonMaterial(0x0a192f);
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 2.75;
+            attachOutline(body, 1.05);
+            trumpMeshGroup.add(body);
+
+            // Red Tie
+            const tieGeo = new THREE.BoxGeometry(0.4, 3, 0.2);
+            const tieMat = createToonMaterial(0xd90429);
+            const tie = new THREE.Mesh(tieGeo, tieMat);
+            tie.position.set(0, 2.5, 1.65);
+            trumpMeshGroup.add(tie);
+
+            // Head (Peach Sphere)
+            const headGeo = new THREE.SphereGeometry(1.4, 16, 16);
+            const headMat = createToonMaterial(0xffcad4);
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 6.0;
+            attachOutline(head, 1.05);
+            trumpMeshGroup.add(head);
+
+            // Yellow Cuboid Hair
+            const hairGeo = new THREE.BoxGeometry(3.2, 1.2, 3.2);
+            const hairMat = createToonMaterial(0xffe600);
+            const hair = new THREE.Mesh(hairGeo, hairMat);
+            hair.position.set(0, 7.2, 0);
+            attachOutline(hair, 1.05);
+            trumpMeshGroup.add(hair);
+
+            trumpMeshGroup.add(createNametagSprite("DONALD TRUMP"));
+
+            // Place inside back of cave
+            trumpMeshGroup.position.set(cavePosition.x, 0, cavePosition.z - 5);
+            scene.add(trumpMeshGroup);
+        }
+
+        function triggerCutscene() {
+            inCutscene = true;
+            cutsceneTriggered = true;
+            cutsceneTimer = 0;
+
+            document.getElementById('cutscene-overlay').style.opacity = '1';
+            if (socket) socket.emit('triggerTrumpBoss');
+        }
+
+        function updateCutscene() {
+            if (!inCutscene) return;
+            cutsceneTimer += 0.015;
+
+            // Pan camera towards Donald Trump inside the cave
+            const targetCamPos = new THREE.Vector3(
+                cavePosition.x + Math.sin(cutsceneTimer * 2) * 8,
+                3.5,
+                cavePosition.z + 12
+            );
+            
+            mainCamera.position.lerp(targetCamPos, 0.05);
+            mainCamera.lookAt(trumpMeshGroup.position.clone().add(new THREE.Vector3(0, 4, 0)));
+
+            if (cutsceneTimer >= 4.0) {
+                inCutscene = false;
+                document.getElementById('cutscene-overlay').style.opacity = '0';
+                document.getElementById('boss-hp-container').style.display = 'block';
+                mainCamera.position.set(0, 0, 0);
+                mainCamera.rotation.set(0, 0, 0);
+            }
+        }
+
         function createKanyeFallbackTexture() {
             const canvas = document.createElement('canvas');
             canvas.width = 128; canvas.height = 128;
@@ -291,6 +443,26 @@
             });
         }
 
+        function updateTrumpBoss() {
+            if (!isTrumpActive || !trumpMeshGroup || trumpHP <= 0 || inCutscene) return;
+
+            // Move towards nearest player
+            const pos = trumpMeshGroup.position;
+            const distToLocal = localGoose.position.distanceTo(pos);
+            const angle = Math.atan2(localGoose.position.x - pos.x, localGoose.position.z - pos.z);
+
+            pos.x += Math.sin(angle) * 0.16;
+            pos.z += Math.cos(angle) * 0.16;
+            pos.y = getHillHeight(pos.x, pos.z);
+            trumpMeshGroup.rotation.y = angle;
+
+            // Damage player if close
+            if (distToLocal < 3.5 && Date.now() - lastDamageTime > 800) {
+                lastDamageTime = Date.now();
+                socket.emit('playerTakeDamage', 15);
+            }
+        }
+
         function joinGame() {
             const input = document.getElementById('nickname-input');
             if (input.value.trim() !== "") playerNickname = input.value.trim();
@@ -308,6 +480,7 @@
             createTerrain();
             createTrees();
             createConcertStage();
+            createCaveAndTrump();
         }
 
         function init() {
@@ -344,7 +517,7 @@
             });
 
             document.addEventListener('mousemove', (e) => {
-                if (!isPointerLocked) return;
+                if (!isPointerLocked || inCutscene) return;
                 localGoose.rotation.y -= e.movementX * 0.002;
                 pitchObject.rotation.x -= e.movementY * 0.002;
                 pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
@@ -402,6 +575,39 @@
                     document.getElementById('score-count').innerText = score;
                 }
             });
+
+            socket.on('trumpState', (tState) => {
+                isTrumpActive = tState.active;
+                trumpHP = tState.hp;
+                trumpMaxHP = tState.maxHp;
+                if (isTrumpActive) document.getElementById('boss-hp-container').style.display = 'block';
+            });
+
+            socket.on('trumpBossActivated', () => {
+                isTrumpActive = true;
+                document.getElementById('boss-hp-container').style.display = 'block';
+            });
+
+            socket.on('trumpHPUpdate', (data) => {
+                trumpHP = data.hp;
+                const pct = (trumpHP / data.maxHp) * 100;
+                document.getElementById('boss-hp-fill').style.width = pct + '%';
+            });
+
+            socket.on('trumpDefeated', () => {
+                if (trumpMeshGroup) scene.remove(trumpMeshGroup);
+                document.getElementById('boss-hp-container').style.display = 'none';
+                const honkUI = document.getElementById('honk-text');
+                honkUI.innerText = "DONALD TRUMP DEFEATED!";
+                honkUI.style.opacity = '1';
+                setTimeout(() => { honkUI.style.opacity = '0'; }, 3000);
+            });
+
+            socket.on('yourHPUpdate', (hp) => {
+                playerHP = hp;
+                document.getElementById('player-hp-fill').style.width = playerHP + '%';
+            });
+
             socket.on('playerDisconnected', (id) => {
                 if (otherGeese[id]) {
                     scene.remove(otherGeese[id].group);
@@ -418,7 +624,7 @@
                     return;
                 }
                 keys[e.code] = true;
-                if (e.code === 'Space' && isGrounded) { velocityY = jumpStrength; isGrounded = false; }
+                if (e.code === 'Space' && isGrounded && !inCutscene) { velocityY = jumpStrength; isGrounded = false; }
                 if (e.code === 'KeyE') performMicAttack();
                 if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !isSliding) startSlide();
             });
@@ -430,8 +636,9 @@
             animate();
         }
 
-        /* 💨 SLIDE MECHANIC (50% Speed Boost) */
+        /* 💨 SLIDE MECHANIC */
         function startSlide() {
+            if (inCutscene) return;
             isSliding = true;
             slideTimer = 35;
         }
@@ -448,7 +655,7 @@
 
         /* 🎙️ MELEE HIT REGISTRATION */
         function performMicAttack() {
-            if (isAttacking) return;
+            if (isAttacking || inCutscene) return;
             isAttacking = true;
             attackProgress = 0;
 
@@ -464,6 +671,10 @@
                     socket.emit('hitKanye', npc.id);
                 }
             });
+
+            if (trumpMeshGroup && localGoose.position.distanceTo(trumpMeshGroup.position) <= 6.5) {
+                socket.emit('hitTrump', 25);
+            }
         }
 
         function animateMicSword() {
@@ -497,7 +708,6 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        /* 🎪 CONCERT STAGE */
         function createConcertStage() {
             const stageGroup = new THREE.Group();
             stageGroup.position.set(0, 0, 0);
@@ -536,7 +746,6 @@
             scene.add(stageGroup);
         }
 
-        /* 🌲 TREES */
         function createTrees() {
             const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 3, 6);
             const leavesGeo = new THREE.ConeGeometry(2.5, 7, 6);
@@ -547,7 +756,7 @@
                 const tx = (Math.random() - 0.5) * 360;
                 const tz = (Math.random() - 0.5) * 360;
 
-                if (Math.hypot(tx, tz) < 35) continue;
+                if (Math.hypot(tx, tz) < 35 || Math.hypot(tx - cavePosition.x, tz - cavePosition.z) < 35) continue;
 
                 const ty = getHillHeight(tx, tz);
                 const treeGroup = new THREE.Group();
@@ -567,7 +776,6 @@
             }
         }
 
-        /* 🖼️ TILING KANYE TERRAIN */
         function createTerrain() {
             const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
             floorGeo.rotateX(-Math.PI / 2);
@@ -597,7 +805,7 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            if (document.activeElement !== document.getElementById('chat-input')) {
+            if (!inCutscene && document.activeElement !== document.getElementById('chat-input')) {
                 let moved = false;
                 let moveSpeed = isSliding ? 0.525 : 0.35;
 
@@ -626,6 +834,11 @@
 
                 updateSlide();
 
+                // Trigger Cave Cutscene when entering cave threshold
+                if (!cutsceneTriggered && localGoose.position.distanceTo(cavePosition) < 22) {
+                    triggerCutscene();
+                }
+
                 if (moved) {
                     socket.emit('playerMovement', {
                         x: localGoose.position.x,
@@ -635,8 +848,10 @@
                 }
             }
 
+            updateCutscene();
             animateMicSword();
             updateKanyeNPCs();
+            updateTrumpBoss();
             renderer.render(scene, mainCamera);
         }
 
