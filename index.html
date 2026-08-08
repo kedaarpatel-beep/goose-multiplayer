@@ -1,131 +1,1005 @@
-const express = require('express');
-const app = express();
-const http = require('http').createServer(app);
-const io = require('socket.io')(http);
-
-app.use(express.static(__dirname));
-
-let players = {};
-let kanyes = {};
-let portalPairs = {};
-let nextKanyeId = 1;
-
-let trumpState = {
-    x: -140,
-    z: -140,
-    hp: 500,
-    maxHp: 500,
-    active: false
-};
-
-// Server-side Kanye Spawner
-setInterval(() => {
-    if (Object.keys(players).length > 0) {
-        const id = 'kanye_' + nextKanyeId++;
-        const rx = (Math.random() - 0.5) * 350;
-        const rz = (Math.random() - 0.5) * 350;
-        kanyes[id] = { id, x: rx, z: rz };
-        io.emit('kanyeSpawned', kanyes[id]);
-    }
-}, 5000);
-
-io.on('connection', (socket) => {
-    players[socket.id] = {
-        id: socket.id,
-        x: (Math.random() - 0.5) * 16,
-        z: 35 + Math.random() * 10,
-        rotationY: 0,
-        rotationX: 0,
-        nickname: "Goose",
-        color: Math.random() * 0xffffff,
-        hp: 100,
-        selectedWeapon: "mic"
-    };
-
-    socket.emit('currentPlayers', players);
-    socket.emit('currentKanyes', kanyes);
-    socket.emit('trumpState', trumpState);
-    socket.emit('currentPortals', portalPairs);
-    socket.broadcast.emit('newPlayer', players[socket.id]);
-
-    socket.on('setNickname', (nickname) => {
-        if (players[socket.id]) players[socket.id].nickname = nickname;
-    });
-
-    socket.on('playerMovement', (data) => {
-        if (players[socket.id]) {
-            players[socket.id].x = data.x;
-            players[socket.id].z = data.z;
-            players[socket.id].rotationY = data.rotationY;
-            players[socket.id].rotationX = data.rotationX;
-            socket.broadcast.emit('playerMoved', players[socket.id]);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Goose World - Portal Surface & Orientation Alignment</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: 'Courier New', Courier, monospace; 
+            background-color: #70d6ff; 
+            user-select: none;
         }
-    });
-
-    socket.on('switchWeapon', (weapon) => {
-        if (players[socket.id]) {
-            players[socket.id].selectedWeapon = weapon;
-            socket.broadcast.emit('playerSwitchedWeapon', { id: socket.id, weapon });
+        #canvas-container { width: 100vw; height: 100vh; cursor: pointer; }
+        
+        #login-screen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(112, 214, 255, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 100;
         }
-    });
-
-    socket.on('firePortal', (data) => {
-        portalPairs[socket.id] = portalPairs[socket.id] || {};
-        portalPairs[socket.id][data.type] = { 
-            x: data.x, 
-            y: data.y, 
-            z: data.z,
-            nx: data.nx,
-            ny: data.ny,
-            nz: data.nz
-        };
-        io.emit('portalSpawned', { playerId: socket.id, type: data.type, pos: portalPairs[socket.id][data.type] });
-    });
-
-    socket.on('honk', () => {
-        socket.broadcast.emit('playerHonked', socket.id);
-    });
-
-    socket.on('chatMessage', (data) => {
-        socket.broadcast.emit('chatMessage', data);
-    });
-
-    socket.on('hitKanye', (kanyeId) => {
-        if (kanyes[kanyeId]) {
-            delete kanyes[kanyeId];
-            io.emit('kanyeDefeated', { id: kanyeId, attackerId: socket.id });
+        #login-box {
+            background: #ffffff; border: 4px solid #1b4332; border-radius: 16px;
+            padding: 30px 40px; text-align: center; box-shadow: 0 10px 0 #1b4332;
+            width: 320px;
         }
-    });
+        #login-box h1 { margin-top: 0; color: #1b4332; font-size: 26px; }
+        .input-group { margin-bottom: 15px; text-align: left; }
+        .input-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #1b4332; }
+        #nickname-input, #map-select {
+            width: 100%; padding: 10px; font-size: 15px; font-family: inherit;
+            border: 3px solid #1b4332; border-radius: 8px; font-weight: bold; outline: none;
+            box-sizing: border-box;
+        }
+        #play-btn {
+            background: #ff477e; color: #ffffff; font-size: 18px; font-weight: bold;
+            padding: 12px 28px; border: 3px solid #000; border-radius: 8px;
+            cursor: pointer; box-shadow: 0 4px 0 #000; transition: transform 0.1s;
+            width: 100%; margin-top: 10px;
+        }
+        #play-btn:active { transform: translateY(4px); box-shadow: none; }
 
-    socket.on('triggerTrumpBoss', () => {
-        trumpState.active = true;
-        io.emit('trumpBossActivated', trumpState);
-    });
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(255, 255, 255, 0.9); color: #1b4332;
+            padding: 15px 20px; border: 4px solid #1b4332; border-radius: 12px;
+            box-shadow: 0 6px 0px #1b4332; pointer-events: none;
+        }
+        #hud h1 { margin: 0 0 5px 0; font-size: 20px; text-transform: uppercase; }
+        #hud p { margin: 3px 0; font-size: 14px; font-weight: bold; }
+        
+        #player-hp-bar-container {
+            width: 180px; height: 16px; background: #333; border: 2px solid #000;
+            border-radius: 8px; margin-top: 6px; overflow: hidden;
+        }
+        #player-hp-fill {
+            width: 100%; height: 100%; background: #2ec4b6; transition: width 0.2s;
+        }
 
-    socket.on('hitTrump', (damage) => {
-        if (trumpState.hp > 0) {
-            trumpState.hp = Math.max(0, trumpState.hp - damage);
-            io.emit('trumpHPUpdate', { hp: trumpState.hp, maxHp: trumpState.maxHp });
-            if (trumpState.hp === 0) {
-                io.emit('trumpDefeated');
+        #boss-hp-container {
+            position: absolute; top: 25px; left: 50%; transform: translateX(-50%);
+            width: 550px; background: rgba(0, 0, 0, 0.85); border: 4px solid #ff477e;
+            border-radius: 12px; padding: 12px 20px; text-align: center; color: #fff;
+            display: none; box-shadow: 0 0 20px rgba(255, 71, 126, 0.6); pointer-events: none;
+            z-index: 20;
+        }
+        #boss-name { font-size: 22px; font-weight: 900; letter-spacing: 2px; color: #ffe600; margin-bottom: 6px; }
+        #boss-hp-bar {
+            width: 100%; height: 22px; background: #222; border: 2px solid #fff; border-radius: 6px; overflow: hidden;
+        }
+        #boss-hp-fill { width: 100%; height: 100%; background: #e63946; transition: width 0.15s; }
+
+        #cutscene-overlay {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            pointer-events: none; display: flex; flex-direction: column;
+            justify-content: space-between; align-items: center; z-index: 30; opacity: 0;
+            transition: opacity 0.5s;
+        }
+        .cutscene-bar { width: 100%; height: 12vh; background: #000; }
+        #cutscene-title {
+            color: #ffe600; font-size: 42px; font-weight: 900; text-shadow: 4px 4px 0 #000;
+            letter-spacing: 3px; text-align: center;
+        }
+
+        #inventory-hud {
+            position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 12px; background: rgba(0,0,0,0.75); border: 3px solid #fff;
+            padding: 8px 12px; border-radius: 12px; z-index: 15;
+        }
+        .inv-slot {
+            width: 60px; height: 60px; border: 3px solid #555; background: #222;
+            border-radius: 8px; color: #fff; font-size: 22px; display: flex;
+            align-items: center; justify-content: center; cursor: pointer; position: relative;
+        }
+        .inv-slot.active { border-color: #ffe600; background: #ff477e; box-shadow: 0 0 10px #ffe600; }
+        .inv-slot span { position: absolute; top: 2px; left: 4px; font-size: 10px; font-weight: bold; }
+
+        #honk-text {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 80px; font-weight: 900; color: #ff477e;
+            text-shadow: 5px 5px 0px #000, -5px -5px 0px #000, 5px -5px 0px #000, -5px 5px 0px #000;
+            opacity: 0; transition: opacity 0.1s ease-in-out; pointer-events: none;
+        }
+        #controls {
+            position: absolute; bottom: 20px; left: 20px;
+            background: rgba(255, 255, 255, 0.9); color: #000;
+            padding: 10px 15px; border-radius: 8px; font-size: 12px;
+            border: 3px solid #1b4332; font-weight: bold; pointer-events: none;
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 8px; height: 8px; background: #ff477e;
+            border: 2px solid #000000; border-radius: 50%; pointer-events: none;
+        }
+
+        #chat-container {
+            position: absolute; bottom: 20px; right: 20px; width: 320px;
+            background: rgba(255, 255, 255, 0.9); border: 3px solid #1b4332;
+            border-radius: 10px; padding: 10px; box-shadow: 0 4px 0 #1b4332;
+            display: flex; flex-direction: column; z-index: 10;
+        }
+        #chat-messages {
+            height: 140px; overflow-y: auto; font-size: 13px; font-weight: bold;
+            margin-bottom: 8px; color: #1b4332; word-wrap: break-word;
+        }
+        #chat-messages p { margin: 4px 0; }
+        #chat-input {
+            width: 90%; padding: 8px; font-family: inherit; font-size: 12px;
+            border: 2px solid #1b4332; border-radius: 6px; outline: none;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+    <div id="login-screen">
+        <div id="login-box">
+            <h1>🪿 STAGE SHOWDOWN</h1>
+            <div class="input-group">
+                <label for="nickname-input">Goose Name:</label>
+                <input type="text" id="nickname-input" placeholder="Enter Goose Name..." maxlength="12" value="Goose" />
+            </div>
+            <div class="input-group">
+                <label for="map-select">Select Atmosphere:</label>
+                <select id="map-select">
+                    <option value="meadow">🌿 Kanye Meadow</option>
+                    <option value="desert">🏜️ Desert Ye</option>
+                    <option value="cyber">🌆 Cyber Ye</option>
+                </select>
+            </div>
+            <button id="play-btn" onclick="joinGame()">TAKE THE STAGE!</button>
+        </div>
+    </div>
+
+    <div id="cutscene-overlay">
+        <div class="cutscene-bar"></div>
+        <div id="cutscene-title">⚠️ FINAL BOSS: DONALD TRUMP ⚠️</div>
+        <div class="cutscene-bar"></div>
+    </div>
+
+    <div id="boss-hp-container">
+        <div id="boss-name">DONALD TRUMP</div>
+        <div id="boss-hp-bar"><div id="boss-hp-fill"></div></div>
+    </div>
+
+    <div id="canvas-container"></div>
+    <div id="crosshair"></div>
+    
+    <div id="inventory-hud">
+        <div id="slot-1" class="inv-slot active" onclick="selectWeapon('mic')"><span>1</span>🎙️</div>
+        <div id="slot-2" class="inv-slot" onclick="selectWeapon('portal')"><span>2</span>🌀</div>
+    </div>
+
+    <div id="hud">
+        <h1>🎙️ Mic Melee FPS</h1>
+        <p>Active Geese: <span id="geese-count">1</span></p>
+        <p>Hostile Kanyes: <span id="kanye-count">0</span></p>
+        <p>Kanyes Defeated: <span id="score-count">0</span></p>
+        <p>Goose Health:</p>
+        <div id="player-hp-bar-container"><div id="player-hp-fill"></div></div>
+    </div>
+    <div id="honk-text">MIC SLAM!</div>
+    <div id="controls">
+        <b>CLICK SCREEN TO LOCK MOUSE</b><br>
+        [W, A, S, D] : Walk<br>
+        [1 / 2] : Switch Weapon (1: Mic, 2: Portal Gun)<br>
+        [LEFT CLICK] : Attack / Fire Blue Portal<br>
+        [RIGHT CLICK] : Fire Orange Portal<br>
+        [C / CTRL] : Slide | [SPACE] : Jump | [T] : Chat
+    </div>
+
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <input type="text" id="chat-input" placeholder="Press T to chat..." maxlength="60" />
+    </div>
+
+    <script>
+        let scene, mainCamera, renderer, socket;
+        let localGoose, pitchObject;
+        let micWeaponGroup, portalGunGroup;
+        let selectedWeapon = "mic";
+
+        let otherGeese = {};
+        let kanyeNPCs = {};
+        let activePortals = {};
+        let kanyeTexture, kanyeTileTexture;
+        let keys = {};
+        let toonGradientMap;
+        const terrainSize = 450;
+        let playerNickname = "Goose";
+        let currentMap = "meadow";
+        let score = 0;
+        let playerHP = 100;
+
+        let treeColliders = [];
+
+        // Mechanics & Physics
+        let isAttacking = false;
+        let attackProgress = 0;
+        let isPointerLocked = false;
+        let velocityY = 0;
+        let isGrounded = true;
+        let isSliding = false;
+        let slideTimer = 0;
+        const gravity = -0.015;
+        const jumpStrength = 0.35;
+
+        let lastPortalTeleportTime = 0;
+
+        // Cave Hole & Trump Boss Logic
+        const cavePosition = new THREE.Vector3(-140, 0, -140);
+        const caveDepth = -25;
+        const caveRadius = 18;
+        let trumpMeshGroup = null;
+        let trumpHP = 500;
+        let trumpMaxHP = 500;
+        let isTrumpActive = false;
+        let inCutscene = false;
+        let cutsceneTimer = 0;
+        let cutsceneTriggered = false;
+        let lastDamageTime = 0;
+
+        function getHillHeight(x, z) {
+            if (Math.abs(x) <= 16 && Math.abs(z) <= 10) {
+                return 3.0;
+            }
+
+            const distToCave = Math.hypot(x - cavePosition.x, z - cavePosition.z);
+            if (distToCave < caveRadius) {
+                const factor = Math.pow(distToCave / caveRadius, 2);
+                return caveDepth + (0 - caveDepth) * factor;
+            }
+            if (Math.hypot(x, z) < 35) return 0;
+            if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
+            if (currentMap === "cyber") return 0;
+            return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
+        }
+
+        function createToonMaterial(colorHex, side = THREE.FrontSide, map = null) {
+            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap, side: side, map: map });
+        }
+
+        function attachOutline(mesh, outlineScale = 1.08) {
+            const outlineMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+            const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMat);
+            outlineMesh.scale.set(outlineScale, outlineScale, outlineScale);
+            mesh.add(outlineMesh);
+        }
+
+        function createMicrophoneWeapon() {
+            const micGroup = new THREE.Group();
+            const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.03, 0.8, 12), createToonMaterial(0x222222));
+            handle.position.y = 0.2; attachOutline(handle, 1.1); micGroup.add(handle);
+
+            const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12), createToonMaterial(0xcccccc));
+            ring.position.y = 0.55; micGroup.add(ring);
+
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 14), createToonMaterial(0xdddddd));
+            head.position.y = 0.65; attachOutline(head, 1.12); micGroup.add(head);
+
+            micGroup.position.set(0.4, -0.3, -0.6);
+            micGroup.rotation.set(0.2, -0.3, -0.2);
+            return micGroup;
+        }
+
+        function createPortalGunWeapon() {
+            const gunGroup = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 0.9, 12), createToonMaterial(0xffffff));
+            body.rotation.x = Math.PI / 2; attachOutline(body, 1.08); gunGroup.add(body);
+
+            const core = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), createToonMaterial(0x00d2ff));
+            core.position.set(0, 0, -0.1); gunGroup.add(core);
+
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 12), createToonMaterial(0x111111));
+            barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0, -0.5); gunGroup.add(barrel);
+
+            gunGroup.position.set(0.4, -0.3, -0.6);
+            return gunGroup;
+        }
+
+        function selectWeapon(type) {
+            selectedWeapon = type;
+            document.getElementById('slot-1').classList.toggle('active', type === 'mic');
+            document.getElementById('slot-2').classList.toggle('active', type === 'portal');
+
+            pitchObject.remove(micWeaponGroup);
+            pitchObject.remove(portalGunGroup);
+
+            if (type === 'mic') pitchObject.add(micWeaponGroup);
+            if (type === 'portal') pitchObject.add(portalGunGroup);
+
+            if (socket) socket.emit('switchWeapon', type);
+        }
+
+        function createNametagSprite(nickname) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)"; ctx.fillRect(0, 0, 256, 64);
+            ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4; ctx.strokeRect(0, 0, 256, 64);
+            ctx.font = 'Bold 28px Courier New'; ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center';
+            ctx.fillText(nickname, 128, 42);
+
+            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
+            sprite.scale.set(3, 0.75, 1);
+            sprite.position.y = 2.8;
+            return sprite;
+        }
+
+        function buildGooseMesh(accentColor = 0xff7b00, isLocal = false, nickname = "Goose") {
+            const group = new THREE.Group();
+            if (isLocal) return { group, headGroup: group };
+
+            const body = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), createToonMaterial(0xffffff));
+            body.scale.set(1, 0.85, 1.4); body.position.y = 1;
+            attachOutline(body, 1.08); group.add(body);
+
+            const headGroup = new THREE.Group();
+            headGroup.position.set(0, 1.1, -0.8);
+
+            const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 1.3, 8), createToonMaterial(0xffffff));
+            neck.position.set(0, 0.65, 0); neck.rotation.x = -0.25;
+            attachOutline(neck, 1.12); headGroup.add(neck);
+
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.7, 8), createToonMaterial(accentColor));
+            beak.position.set(0, 1.1, -0.45); beak.rotation.x = -Math.PI / 2;
+            attachOutline(beak, 1.15); headGroup.add(beak);
+
+            const micHeld = createMicrophoneWeapon();
+            micHeld.position.set(0.6, 0.2, -0.2);
+            headGroup.add(micHeld);
+
+            group.add(headGroup);
+            group.add(createNametagSprite(nickname));
+            return { group, headGroup, micHeld };
+        }
+
+        function createCaveAndTrump() {
+            const caveFloorGeo = new THREE.CircleGeometry(caveRadius, 32);
+            caveFloorGeo.rotateX(-Math.PI / 2);
+            const caveFloor = new THREE.Mesh(caveFloorGeo, createToonMaterial(0x1a1a1a));
+            caveFloor.position.set(cavePosition.x, caveDepth + 0.1, cavePosition.z);
+            scene.add(caveFloor);
+
+            trumpMeshGroup = new THREE.Group();
+            
+            const bodyGeo = new THREE.CylinderGeometry(1.6, 1.6, 5.5, 16);
+            const body = new THREE.Mesh(bodyGeo, createToonMaterial(0x0a192f));
+            body.position.y = 2.75; attachOutline(body, 1.05); trumpMeshGroup.add(body);
+
+            const tie = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3, 0.2), createToonMaterial(0xd90429));
+            tie.position.set(0, 2.5, 1.65); trumpMeshGroup.add(tie);
+
+            const head = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 16), createToonMaterial(0xffcad4));
+            head.position.y = 6.0; attachOutline(head, 1.05); trumpMeshGroup.add(head);
+
+            const hair = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.2, 3.2), createToonMaterial(0xffe600));
+            hair.position.set(0, 7.2, 0); attachOutline(hair, 1.05); trumpMeshGroup.add(hair);
+
+            trumpMeshGroup.add(createNametagSprite("DONALD TRUMP"));
+            trumpMeshGroup.position.set(cavePosition.x, caveDepth, cavePosition.z);
+            scene.add(trumpMeshGroup);
+        }
+
+        function triggerCutscene() {
+            inCutscene = true;
+            cutsceneTriggered = true;
+            cutsceneTimer = 0;
+
+            document.getElementById('cutscene-overlay').style.opacity = '1';
+            if (socket) socket.emit('triggerTrumpBoss');
+        }
+
+        function updateCutscene() {
+            if (!inCutscene) return;
+            cutsceneTimer += 0.015;
+
+            const targetCamPos = new THREE.Vector3(
+                cavePosition.x + Math.sin(cutsceneTimer * 2) * 10,
+                caveDepth + 8,
+                cavePosition.z + 14
+            );
+            
+            mainCamera.position.lerp(targetCamPos, 0.05);
+            mainCamera.lookAt(trumpMeshGroup.position.clone().add(new THREE.Vector3(0, 3, 0)));
+
+            if (cutsceneTimer >= 4.0) {
+                inCutscene = false;
+                document.getElementById('cutscene-overlay').style.opacity = '0';
+                document.getElementById('boss-hp-container').style.display = 'block';
+                mainCamera.position.set(0, 0, 0);
+                mainCamera.rotation.set(0, 0, 0);
             }
         }
-    });
 
-    socket.on('playerTakeDamage', (damage) => {
-        if (players[socket.id]) {
-            players[socket.id].hp = Math.max(0, players[socket.id].hp - damage);
-            socket.emit('yourHPUpdate', players[socket.id].hp);
+        function createKanyeFallbackTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#8d5524'; ctx.fillRect(0, 0, 128, 128);
+            ctx.fillStyle = '#111'; ctx.fillRect(20, 30, 35, 25); ctx.fillRect(73, 30, 35, 25);
+            ctx.fillStyle = '#ff477e'; ctx.fillRect(35, 80, 58, 15);
+            return new THREE.CanvasTexture(canvas);
         }
-    });
 
-    socket.on('disconnect', () => {
-        delete players[socket.id];
-        delete portalPairs[socket.id];
-        io.emit('playerDisconnected', socket.id);
-    });
-});
+        function spawnKanyeMesh(kData) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10), createToonMaterial(0x111111));
+            body.position.y = 1.1; attachOutline(body, 1.08); group.add(body);
 
-http.listen(3000, () => {
-    console.log('Server listening on port 3000');
-});
+            const headSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true }));
+            headSprite.scale.set(2.5, 2.5, 1); headSprite.position.y = 2.8; group.add(headSprite);
+
+            const tag = createNametagSprite("HOSTILE YE"); tag.position.y = 4.2; group.add(tag);
+
+            group.position.set(kData.x, getHillHeight(kData.x, kData.z), kData.z);
+            scene.add(group);
+
+            kanyeNPCs[kData.id] = { id: kData.id, mesh: group, speed: 0.13 };
+            document.getElementById('kanye-count').innerText = Object.keys(kanyeNPCs).length;
+        }
+
+        function updateKanyeNPCs() {
+            const allPlayers = [localGoose.position];
+            Object.values(otherGeese).forEach(og => { if (og && og.group) allPlayers.push(og.group.position); });
+
+            Object.values(kanyeNPCs).forEach((npc) => {
+                const pos = npc.mesh.position;
+                let nearestPlayerPos = null;
+                let minDistSq = Infinity;
+
+                allPlayers.forEach(pPos => {
+                    const distSq = (pPos.x - pos.x) ** 2 + (pPos.z - pos.z) ** 2;
+                    if (distSq < minDistSq) { minDistSq = distSq; nearestPlayerPos = pPos; }
+                });
+
+                if (nearestPlayerPos) {
+                    const angle = Math.atan2(nearestPlayerPos.x - pos.x, nearestPlayerPos.z - pos.z);
+                    pos.x += Math.sin(angle) * npc.speed;
+                    pos.z += Math.cos(angle) * npc.speed;
+                    pos.y = getHillHeight(pos.x, pos.z);
+                    npc.mesh.rotation.y = angle;
+                }
+            });
+        }
+
+        function updateTrumpBoss() {
+            if (!isTrumpActive || !trumpMeshGroup || trumpHP <= 0 || inCutscene) return;
+
+            const pos = trumpMeshGroup.position;
+            const angle = Math.atan2(localGoose.position.x - pos.x, localGoose.position.z - pos.z);
+
+            pos.x += Math.sin(angle) * 0.16;
+            pos.z += Math.cos(angle) * 0.16;
+            pos.y = getHillHeight(pos.x, pos.z);
+            trumpMeshGroup.rotation.y = angle;
+
+            if (localGoose.position.distanceTo(pos) < 3.5 && Date.now() - lastDamageTime > 800) {
+                lastDamageTime = Date.now();
+                socket.emit('playerTakeDamage', 15);
+            }
+        }
+
+        function handleCollisions() {
+            const p = localGoose.position;
+
+            for (let tree of treeColliders) {
+                let dx = p.x - tree.x;
+                let dz = p.z - tree.z;
+                let dist = Math.hypot(dx, dz);
+                if (dist < tree.radius && dist > 0) {
+                    let overlap = tree.radius - dist;
+                    p.x += (dx / dist) * overlap;
+                    p.z += (dz / dist) * overlap;
+                }
+            }
+
+            Object.values(kanyeNPCs).forEach(npc => {
+                let dx = p.x - npc.mesh.position.x;
+                let dz = p.z - npc.mesh.position.z;
+                let dist = Math.hypot(dx, dz);
+                let minDist = 1.8;
+                if (dist < minDist && dist > 0) {
+                    let overlap = minDist - dist;
+                    p.x += (dx / dist) * overlap;
+                    p.z += (dz / dist) * overlap;
+                }
+            });
+
+            if (Math.abs(p.x) < 16.5 && p.z < -8.0 && p.z > -10.5) {
+                p.z = -8.0;
+            }
+
+            if (p.y < 2.5) {
+                if (Math.abs(p.x) < 16.2 && Math.abs(p.z) < 10.2) {
+                    if (p.z > 0) p.z = 10.2;
+                    else if (p.x > 0) p.x = 16.2;
+                    else p.x = -16.2;
+                }
+            }
+        }
+
+        function joinGame() {
+            const input = document.getElementById('nickname-input');
+            if (input.value.trim() !== "") playerNickname = input.value.trim();
+            currentMap = document.getElementById('map-select').value;
+            document.getElementById('login-screen').style.display = 'none';
+            applyMapTheme();
+            
+            localGoose.position.set(0, getHillHeight(0, 35), 35);
+
+            document.getElementById('canvas-container').requestPointerLock();
+            if (socket) socket.emit('setNickname', playerNickname);
+        }
+
+        function applyMapTheme() {
+            let color = (currentMap === "desert") ? 0xf2cc8f : (currentMap === "cyber") ? 0x0d0221 : 0x70d6ff;
+            scene.background = new THREE.Color(color);
+            scene.fog.color = new THREE.Color(color);
+            createTerrain();
+            createTrees();
+            createConcertStage();
+            createCaveAndTrump();
+        }
+
+        function init() {
+            socket = io();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x70d6ff);
+            scene.fog = new THREE.FogExp2(0x70d6ff, 0.0035);
+
+            mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            localGoose = new THREE.Group();
+            pitchObject = new THREE.Group();
+            pitchObject.position.y = 1.6;
+            
+            pitchObject.add(mainCamera);
+            micWeaponGroup = createMicrophoneWeapon();
+            portalGunGroup = createPortalGunWeapon();
+            pitchObject.add(micWeaponGroup);
+
+            localGoose.add(pitchObject);
+            localGoose.position.set(0, 0, 35);
+            scene.add(localGoose);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            const container = document.getElementById('canvas-container');
+            container.appendChild(renderer.domElement);
+
+            container.addEventListener('click', () => {
+                if (document.activeElement !== document.getElementById('chat-input')) container.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isPointerLocked = (document.pointerLockElement === container);
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isPointerLocked || inCutscene) return;
+                localGoose.rotation.y -= e.movementX * 0.002;
+                pitchObject.rotation.x -= e.movementY * 0.002;
+                pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
+            });
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 4; canvas.height = 1;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#333'; ctx.fillRect(0, 0, 1, 1);
+            ctx.fillStyle = '#888'; ctx.fillRect(1, 0, 1, 1);
+            ctx.fillStyle = '#fff'; ctx.fillRect(2, 0, 2, 1);
+            toonGradientMap = new THREE.CanvasTexture(canvas);
+            toonGradientMap.minFilter = THREE.NearestFilter;
+            toonGradientMap.magFilter = THREE.NearestFilter;
+
+            const loader = new THREE.TextureLoader();
+            kanyeTexture = loader.load('kanye.png', (tex) => {
+                kanyeTileTexture = tex.clone();
+                kanyeTileTexture.wrapS = THREE.RepeatWrapping;
+                kanyeTileTexture.wrapT = THREE.RepeatWrapping;
+                kanyeTileTexture.repeat.set(40, 40);
+                kanyeTileTexture.needsUpdate = true;
+            }, undefined, () => { 
+                kanyeTexture = createKanyeFallbackTexture();
+                kanyeTileTexture = kanyeTexture;
+                kanyeTileTexture.wrapS = THREE.RepeatWrapping;
+                kanyeTileTexture.wrapT = THREE.RepeatWrapping;
+                kanyeTileTexture.repeat.set(40, 40);
+            });
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+            const dirLight = new THREE.DirectionalLight(0xfffae0, 0.9);
+            dirLight.position.set(100, 120, 50);
+            scene.add(dirLight);
+
+            socket.on('currentPlayers', (players) => {
+                Object.keys(players).forEach(id => { if (id !== socket.id) addOtherPlayer(players[id]); });
+                updatePlayerCount();
+            });
+            socket.on('newPlayer', addOtherPlayer);
+            socket.on('playerMoved', (p) => {
+                if (otherGeese[p.id]) {
+                    otherGeese[p.id].group.position.set(p.x, getHillHeight(p.x, p.z), p.z);
+                    otherGeese[p.id].group.rotation.y = p.rotationY;
+                    if (otherGeese[p.id].headGroup) {
+                        otherGeese[p.id].headGroup.rotation.x = p.rotationX;
+                    }
+                }
+            });
+
+            socket.on('currentKanyes', (kMap) => { Object.values(kMap).forEach(spawnKanyeMesh); });
+            socket.on('kanyeSpawned', spawnKanyeMesh);
+            socket.on('kanyeDefeated', (data) => {
+                if (kanyeNPCs[data.id]) {
+                    scene.remove(kanyeNPCs[data.id].mesh);
+                    delete kanyeNPCs[data.id];
+                    document.getElementById('kanye-count').innerText = Object.keys(kanyeNPCs).length;
+                }
+                if (data.attackerId === socket.id) {
+                    score++;
+                    document.getElementById('score-count').innerText = score;
+                }
+            });
+
+            socket.on('portalSpawned', (data) => { spawnPortalMesh(data.playerId, data.type, data.pos); });
+
+            socket.on('trumpState', (tState) => {
+                isTrumpActive = tState.active;
+                trumpHP = tState.hp; trumpMaxHP = tState.maxHp;
+                if (isTrumpActive) document.getElementById('boss-hp-container').style.display = 'block';
+            });
+
+            socket.on('trumpBossActivated', () => {
+                isTrumpActive = true;
+                document.getElementById('boss-hp-container').style.display = 'block';
+            });
+
+            socket.on('trumpHPUpdate', (data) => {
+                trumpHP = data.hp;
+                const pct = (trumpHP / data.maxHp) * 100;
+                document.getElementById('boss-hp-fill').style.width = pct + '%';
+            });
+
+            socket.on('trumpDefeated', () => {
+                if (trumpMeshGroup) scene.remove(trumpMeshGroup);
+                document.getElementById('boss-hp-container').style.display = 'none';
+                const honkUI = document.getElementById('honk-text');
+                honkUI.innerText = "DONALD TRUMP DEFEATED!"; honkUI.style.opacity = '1';
+                setTimeout(() => { honkUI.style.opacity = '0'; }, 3000);
+            });
+
+            socket.on('yourHPUpdate', (hp) => {
+                playerHP = hp;
+                document.getElementById('player-hp-fill').style.width = playerHP + '%';
+            });
+
+            socket.on('playerDisconnected', (id) => {
+                if (otherGeese[id]) {
+                    scene.remove(otherGeese[id].group);
+                    delete otherGeese[id];
+                    updatePlayerCount();
+                }
+            });
+
+            const chatInput = document.getElementById('chat-input');
+            window.addEventListener('keydown', (e) => {
+                if (document.activeElement === chatInput) {
+                    if (e.code === 'Enter') sendChatMessage();
+                    return;
+                }
+                keys[e.code] = true;
+                if (e.code === 'Digit1') selectWeapon('mic');
+                if (e.code === 'Digit2') selectWeapon('portal');
+                if (e.code === 'Space' && isGrounded && !inCutscene) { velocityY = jumpStrength; isGrounded = false; }
+                if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !isSliding) startSlide();
+            });
+            window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+            window.addEventListener('mousedown', (e) => {
+                if (!isPointerLocked) return;
+                if (e.button === 0) performPrimaryAction();
+                if (e.button === 2 && selectedWeapon === 'portal') firePortal('orange');
+            });
+            window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            animate();
+        }
+
+        /* 🌀 PORTAL GUN: DYNAMIC SURFACE NORMAL & OUTWARD TELEPORT EXIT ORIENTATION */
+        function firePortal(type) {
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), mainCamera);
+            const intersects = raycaster.intersectObjects(scene.children, true);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const point = hit.point;
+
+                // Transform normal from object space to world space so wall normals work correctly
+                const worldNormal = hit.face.normal.clone();
+                worldNormal.transformDirection(hit.object.matrixWorld).normalize();
+
+                socket.emit('firePortal', { 
+                    type, 
+                    x: point.x, 
+                    y: point.y, 
+                    z: point.z, 
+                    nx: worldNormal.x, 
+                    ny: worldNormal.y, 
+                    nz: worldNormal.z 
+                });
+            }
+        }
+
+        function spawnPortalMesh(playerId, type, pos) {
+            const key = playerId + '_' + type;
+            if (activePortals[key]) scene.remove(activePortals[key].mesh);
+
+            const ringGeo = new THREE.TorusGeometry(1.5, 0.2, 12, 24);
+            const ringMat = new THREE.MeshBasicMaterial({ color: (type === 'blue') ? 0x00d2ff : 0xff7b00 });
+            const portalMesh = new THREE.Mesh(ringGeo, ringMat);
+
+            const normal = new THREE.Vector3(
+                pos.nx !== undefined ? pos.nx : 0, 
+                pos.ny !== undefined ? pos.ny : 1, 
+                pos.nz !== undefined ? pos.nz : 0
+            ).normalize();
+
+            // Offset slightly out from wall/ground so torus doesn't clip surface
+            portalMesh.position.set(
+                pos.x + normal.x * 0.1,
+                pos.y + normal.y * 0.1,
+                pos.z + normal.z * 0.1
+            );
+
+            // Dynamically orient portal face along normal
+            const lookTarget = portalMesh.position.clone().add(normal);
+            portalMesh.lookAt(lookTarget);
+
+            scene.add(portalMesh);
+
+            activePortals[key] = {
+                mesh: portalMesh,
+                normal: normal
+            };
+        }
+
+        function checkPortalTeleport() {
+            const now = Date.now();
+            if (now - lastPortalTeleportTime < 1500) return;
+
+            const blueData = activePortals[socket.id + '_blue'];
+            const orangeData = activePortals[socket.id + '_orange'];
+            if (!blueData || !orangeData) return;
+
+            const localPos = localGoose.position;
+
+            if (localPos.distanceTo(blueData.mesh.position) < 2.5) {
+                teleportPlayerOut(orangeData);
+                lastPortalTeleportTime = now;
+            } else if (localPos.distanceTo(orangeData.mesh.position) < 2.5) {
+                teleportPlayerOut(blueData);
+                lastPortalTeleportTime = now;
+            }
+        }
+
+        function teleportPlayerOut(targetPortalData) {
+            const portalPos = targetPortalData.mesh.position;
+            const norm = targetPortalData.normal;
+
+            // Spawn player out in front of exit portal along normal line
+            localGoose.position.set(
+                portalPos.x + norm.x * 2.5,
+                portalPos.y + (norm.y > 0.5 ? 0.5 : norm.y * 1.5),
+                portalPos.z + norm.z * 2.5
+            );
+
+            // Face player outward in direction of portal normal
+            if (Math.abs(norm.x) > 0.05 || Math.abs(norm.z) > 0.05) {
+                localGoose.rotation.y = Math.atan2(norm.x, norm.z);
+            }
+
+            // Pitch view flat when exiting vertical surfaces
+            if (Math.abs(norm.y) < 0.5) {
+                pitchObject.rotation.x = 0;
+            }
+        }
+
+        function performPrimaryAction() {
+            if (selectedWeapon === 'portal') {
+                firePortal('blue');
+            } else {
+                performMicAttack();
+            }
+        }
+
+        function startSlide() {
+            if (inCutscene) return;
+            isSliding = true; slideTimer = 35;
+        }
+
+        function updateSlide() {
+            if (!isSliding) return;
+            slideTimer--; pitchObject.position.y = 0.8;
+            if (slideTimer <= 0) { isSliding = false; pitchObject.position.y = 1.6; }
+        }
+
+        function performMicAttack() {
+            if (isAttacking || inCutscene) return;
+            isAttacking = true; attackProgress = 0;
+
+            const honkUI = document.getElementById('honk-text');
+            honkUI.innerText = "MIC SLAM!"; honkUI.style.opacity = '1';
+            setTimeout(() => { honkUI.style.opacity = '0'; }, 250);
+
+            if (socket) socket.emit('honk');
+
+            const attackRange = 5.0;
+            Object.values(kanyeNPCs).forEach(npc => {
+                if (localGoose.position.distanceTo(npc.mesh.position) <= attackRange) {
+                    socket.emit('hitKanye', npc.id);
+                }
+            });
+
+            if (trumpMeshGroup && localGoose.position.distanceTo(trumpMeshGroup.position) <= 6.5) {
+                socket.emit('hitTrump', 25);
+            }
+        }
+
+        function animateMicSword() {
+            if (!isAttacking || selectedWeapon !== 'mic') return;
+            attackProgress += 0.15;
+            micWeaponGroup.rotation.x = 0.2 - Math.sin(attackProgress * Math.PI) * 1.5;
+            micWeaponGroup.rotation.y = -0.3 + Math.sin(attackProgress * Math.PI) * 1.2;
+            if (attackProgress >= 1) {
+                isAttacking = false;
+                micWeaponGroup.rotation.set(0.2, -0.3, -0.2);
+            }
+        }
+
+        function sendChatMessage() {
+            const chatInput = document.getElementById('chat-input');
+            const msg = chatInput.value.trim();
+            if (msg !== "") {
+                socket.emit('chatMessage', { nickname: playerNickname, message: msg });
+                appendChatMessage(playerNickname, msg);
+                chatInput.value = "";
+            }
+            chatInput.blur();
+            document.getElementById('canvas-container').requestPointerLock();
+        }
+
+        function appendChatMessage(sender, message) {
+            const container = document.getElementById('chat-messages');
+            const msgEl = document.createElement('p');
+            msgEl.innerHTML = `<span style="color: #ff477e;">[${sender}]</span>: ${message}`;
+            container.appendChild(msgEl);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function createConcertStage() {
+            const stageGroup = new THREE.Group();
+            stageGroup.position.set(0, 0, 0);
+
+            const platform = new THREE.Mesh(new THREE.BoxGeometry(32, 3, 20), createToonMaterial(0x1a1a1a));
+            platform.position.y = 1.5; attachOutline(platform, 1.02); stageGroup.add(platform);
+
+            const backdrop = new THREE.Mesh(new THREE.BoxGeometry(32, 14, 0.6), createToonMaterial(0x0a0a0a));
+            backdrop.position.set(0, 10, -9.5); attachOutline(backdrop, 1.02); stageGroup.add(backdrop);
+
+            const speakerLeft = new THREE.Mesh(new THREE.BoxGeometry(5, 10, 4), createToonMaterial(0x222222));
+            speakerLeft.position.set(-13, 8, -7); attachOutline(speakerLeft, 1.05); stageGroup.add(speakerLeft);
+
+            const speakerRight = speakerLeft.clone(); speakerRight.position.set(13, 8, -7); stageGroup.add(speakerRight);
+
+            scene.add(stageGroup);
+        }
+
+        function createTrees() {
+            treeColliders = [];
+            const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 3, 6);
+            const leavesGeo = new THREE.ConeGeometry(2.5, 7, 6);
+            const trunkMat = createToonMaterial(0x5c3d2e);
+            const leavesMat = createToonMaterial(0x2d6a4f);
+
+            for (let i = 0; i < 65; i++) {
+                const tx = (Math.random() - 0.5) * 360;
+                const tz = (Math.random() - 0.5) * 360;
+
+                if (Math.hypot(tx, tz) < 35 || Math.hypot(tx - cavePosition.x, tz - cavePosition.z) < 35) continue;
+
+                const ty = getHillHeight(tx, tz);
+                const treeGroup = new THREE.Group();
+                treeGroup.position.set(tx, ty, tz);
+
+                const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.position.y = 1.5; attachOutline(trunk, 1.08); treeGroup.add(trunk);
+                const leaves = new THREE.Mesh(leavesGeo, leavesMat); leaves.position.y = 5; attachOutline(leaves, 1.08); treeGroup.add(leaves);
+
+                scene.add(treeGroup);
+                treeColliders.push({ x: tx, z: tz, radius: 1.8 });
+            }
+        }
+
+        function createTerrain() {
+            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
+            floorGeo.rotateX(-Math.PI / 2);
+            const pos = floorGeo.attributes.position;
+            for (let i = 0; i < pos.count; i++) pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
+            floorGeo.computeVertexNormals();
+
+            const groundMat = createToonMaterial(0xffffff, THREE.FrontSide, kanyeTileTexture || kanyeTexture);
+            scene.add(new THREE.Mesh(floorGeo, groundMat));
+        }
+
+        function addOtherPlayer(info) {
+            const gooseData = buildGooseMesh(info.color, false, info.nickname || "Goose");
+            gooseData.group.position.set(info.x, getHillHeight(info.x, info.z), info.z);
+            scene.add(gooseData.group);
+            otherGeese[info.id] = gooseData;
+        }
+
+        function updatePlayerCount() {
+            document.getElementById('geese-count').innerText = Object.keys(otherGeese).length + 1;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (!inCutscene && document.activeElement !== document.getElementById('chat-input')) {
+                let moveSpeed = isSliding ? 0.525 : 0.35;
+
+                const moveVector = new THREE.Vector3();
+                if (keys['KeyW']) moveVector.z -= 1;
+                if (keys['KeyS']) moveVector.z += 1;
+                if (keys['KeyA']) moveVector.x -= 1;
+                if (keys['KeyD']) moveVector.x += 1;
+
+                if (moveVector.length() > 0) {
+                    moveVector.normalize();
+                    moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
+                    localGoose.position.addScaledVector(moveVector, moveSpeed);
+                }
+
+                handleCollisions();
+
+                velocityY += gravity;
+                localGoose.position.y += velocityY;
+
+                const floorY = getHillHeight(localGoose.position.x, localGoose.position.z);
+                if (localGoose.position.y <= floorY) {
+                    localGoose.position.y = floorY;
+                    velocityY = 0;
+                    isGrounded = true;
+                }
+
+                updateSlide();
+                checkPortalTeleport();
+
+                if (!cutsceneTriggered && localGoose.position.distanceTo(cavePosition) < caveRadius) {
+                    triggerCutscene();
+                }
+
+                socket.emit('playerMovement', {
+                    x: localGoose.position.x,
+                    z: localGoose.position.z,
+                    rotationY: localGoose.rotation.y,
+                    rotationX: pitchObject.rotation.x
+                });
+            }
+
+            updateCutscene();
+            animateMicSword();
+            updateKanyeNPCs();
+            updateTrumpBoss();
+            renderer.render(scene, mainCamera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
