@@ -30,7 +30,6 @@ setInterval(() => {
 }, 5000);
 
 io.on('connection', (socket) => {
-    // Spawn player in front of stage at z = 35..45 instead of inside stage (0, 0)
     players[socket.id] = {
         id: socket.id,
         x: (Math.random() - 0.5) * 16,
@@ -72,7 +71,14 @@ io.on('connection', (socket) => {
 
     socket.on('firePortal', (data) => {
         portalPairs[socket.id] = portalPairs[socket.id] || {};
-        portalPairs[socket.id][data.type] = { x: data.x, y: data.y, z: data.z };
+        portalPairs[socket.id][data.type] = { 
+            x: data.x, 
+            y: data.y, 
+            z: data.z,
+            nx: data.nx,
+            ny: data.ny,
+            nz: data.nz
+        };
         io.emit('portalSpawned', { playerId: socket.id, type: data.type, pos: portalPairs[socket.id][data.type] });
     });
 
