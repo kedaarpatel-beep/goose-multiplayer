@@ -30,10 +30,11 @@ setInterval(() => {
 }, 5000);
 
 io.on('connection', (socket) => {
+    // Spawn player in front of stage at z = 35..45 instead of inside stage (0, 0)
     players[socket.id] = {
         id: socket.id,
-        x: (Math.random() - 0.5) * 20,
-        z: 25 + Math.random() * 10,
+        x: (Math.random() - 0.5) * 16,
+        z: 35 + Math.random() * 10,
         rotationY: 0,
         rotationX: 0,
         nickname: "Goose",
