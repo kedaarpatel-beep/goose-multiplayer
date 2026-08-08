@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goose World - Cave Hole, Dynamic Head Pitch & Weapon Wheel</title>
+    <title>Goose World - Collision & Portal Cooldown Update</title>
     <style>
         body { 
             margin: 0; 
@@ -83,7 +83,6 @@
             letter-spacing: 3px; text-align: center;
         }
 
-        /* Inventory Selection Hotbar */
         #inventory-hud {
             position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
             display: flex; gap: 12px; background: rgba(0,0,0,0.75); border: 3px solid #fff;
@@ -190,8 +189,7 @@
         [1 / 2] : Switch Weapon (1: Mic, 2: Portal Gun)<br>
         [LEFT CLICK] : Attack / Fire Blue Portal<br>
         [RIGHT CLICK] : Fire Orange Portal<br>
-        [C / CTRL] : 50% Speed Boost Slide<br>
-        [SPACE] : Jump | [T / ENTER] : Chat
+        [C / CTRL] : Slide | [SPACE] : Jump | [T] : Chat
     </div>
 
     <div id="chat-container">
@@ -201,7 +199,7 @@
 
     <script>
         let scene, mainCamera, renderer, socket;
-        let localGoose, pitchObject, currentWeaponGroup;
+        let localGoose, pitchObject;
         let micWeaponGroup, portalGunGroup;
         let selectedWeapon = "mic";
 
@@ -217,6 +215,9 @@
         let score = 0;
         let playerHP = 100;
 
+        // Collision objects storage
+        let treeColliders = [];
+
         // Mechanics & Physics
         let isAttacking = false;
         let attackProgress = 0;
@@ -227,6 +228,9 @@
         let slideTimer = 0;
         const gravity = -0.015;
         const jumpStrength = 0.35;
+
+        // Portal teleport cooldown to fix infinite bouncing
+        let lastPortalTeleportTime = 0;
 
         // Cave Hole & Trump Boss Logic
         const cavePosition = new THREE.Vector3(-140, 0, -140);
@@ -242,9 +246,13 @@
         let lastDamageTime = 0;
 
         function getHillHeight(x, z) {
+            // Stage surface height elevation when walking on stage
+            if (Math.abs(x) <= 16 && Math.abs(z) <= 10) {
+                return 3.0; // Stage top deck surface
+            }
+
             const distToCave = Math.hypot(x - cavePosition.x, z - cavePosition.z);
             if (distToCave < caveRadius) {
-                // Slope smooth hole into the ground
                 const factor = Math.pow(distToCave / caveRadius, 2);
                 return caveDepth + (0 - caveDepth) * factor;
             }
@@ -353,16 +361,13 @@
             return { group, headGroup, micHeld };
         }
 
-        /* 🕳️ HOLE-IN-THE-GROUND CAVE & TRUMP BOSS */
         function createCaveAndTrump() {
-            // Cave Floor Base Inside Hole
             const caveFloorGeo = new THREE.CircleGeometry(caveRadius, 32);
             caveFloorGeo.rotateX(-Math.PI / 2);
             const caveFloor = new THREE.Mesh(caveFloorGeo, createToonMaterial(0x1a1a1a));
             caveFloor.position.set(cavePosition.x, caveDepth + 0.1, cavePosition.z);
             scene.add(caveFloor);
 
-            // Donald Trump Boss inside Cave Hole Base
             trumpMeshGroup = new THREE.Group();
             
             const bodyGeo = new THREE.CylinderGeometry(1.6, 1.6, 5.5, 16);
@@ -396,7 +401,6 @@
             if (!inCutscene) return;
             cutsceneTimer += 0.015;
 
-            // Pan camera down into the underground cave hole
             const targetCamPos = new THREE.Vector3(
                 cavePosition.x + Math.sin(cutsceneTimer * 2) * 10,
                 caveDepth + 8,
@@ -484,12 +488,60 @@
             }
         }
 
+        /* 🛑 PLAYER COLLISION RESOLUTION (Trees, Kanyes, Stage Wall) */
+        function handleCollisions() {
+            const p = localGoose.position;
+
+            // 1. Tree Collisions
+            for (let tree of treeColliders) {
+                let dx = p.x - tree.x;
+                let dz = p.z - tree.z;
+                let dist = Math.hypot(dx, dz);
+                if (dist < tree.radius && dist > 0) {
+                    let overlap = tree.radius - dist;
+                    p.x += (dx / dist) * overlap;
+                    p.z += (dz / dist) * overlap;
+                }
+            }
+
+            // 2. Kanye NPC Collisions
+            Object.values(kanyeNPCs).forEach(npc => {
+                let dx = p.x - npc.mesh.position.x;
+                let dz = p.z - npc.mesh.position.z;
+                let dist = Math.hypot(dx, dz);
+                let minDist = 1.8;
+                if (dist < minDist && dist > 0) {
+                    let overlap = minDist - dist;
+                    p.x += (dx / dist) * overlap;
+                    p.z += (dz / dist) * overlap;
+                }
+            });
+
+            // 3. Stage Backdrop Wall Collision
+            if (Math.abs(p.x) < 16.5 && p.z < -8.0 && p.z > -10.5) {
+                p.z = -8.0; // Block walking through backdrop wall
+            }
+
+            // 4. Stage Front/Side Escalation (Prevent clipping inside platform sides)
+            if (p.y < 2.5) {
+                if (Math.abs(p.x) < 16.2 && Math.abs(p.z) < 10.2) {
+                    if (p.z > 0) p.z = 10.2;
+                    else if (p.x > 0) p.x = 16.2;
+                    else p.x = -16.2;
+                }
+            }
+        }
+
         function joinGame() {
             const input = document.getElementById('nickname-input');
             if (input.value.trim() !== "") playerNickname = input.value.trim();
             currentMap = document.getElementById('map-select').value;
             document.getElementById('login-screen').style.display = 'none';
             applyMapTheme();
+            
+            // Spawn player safely in front of stage at z = 35
+            localGoose.position.set(0, getHillHeight(0, 35), 35);
+
             document.getElementById('canvas-container').requestPointerLock();
             if (socket) socket.emit('setNickname', playerNickname);
         }
@@ -523,6 +575,7 @@
             pitchObject.add(micWeaponGroup);
 
             localGoose.add(pitchObject);
+            localGoose.position.set(0, 0, 35); // Initial safe spawn point in front of stage
             scene.add(localGoose);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -585,7 +638,6 @@
                 if (otherGeese[p.id]) {
                     otherGeese[p.id].group.position.set(p.x, getHillHeight(p.x, p.z), p.z);
                     otherGeese[p.id].group.rotation.y = p.rotationY;
-                    // Mirror vertical pitch/head movements to other players
                     if (otherGeese[p.id].headGroup) {
                         otherGeese[p.id].headGroup.rotation.x = p.rotationX;
                     }
@@ -670,7 +722,7 @@
             animate();
         }
 
-        /* 🌀 PORTAL GUN LOGIC */
+        /* 🌀 PORTAL GUN LOGIC & INFINITE TELEPORT GLITCH FIX */
         function firePortal(type) {
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(new THREE.Vector2(0, 0), mainCamera);
@@ -678,7 +730,8 @@
 
             if (intersects.length > 0) {
                 const hit = intersects[0].point;
-                socket.emit('firePortal', { type, x: hit.x, y: hit.y, z: hit.z });
+                const normal = intersects[0].face.normal;
+                socket.emit('firePortal', { type, x: hit.x, y: hit.y, z: hit.z, nx: normal.x, ny: normal.y, nz: normal.z });
             }
         }
 
@@ -689,7 +742,7 @@
             const ringGeo = new THREE.TorusGeometry(1.5, 0.2, 12, 24);
             const ringMat = new THREE.MeshBasicMaterial({ color: (type === 'blue') ? 0x00d2ff : 0xff7b00 });
             const portalMesh = new THREE.Mesh(ringGeo, ringMat);
-            portalMesh.position.set(pos.x, pos.y + 1, pos.z);
+            portalMesh.position.set(pos.x, pos.y + 1.2, pos.z);
             portalMesh.rotation.x = Math.PI / 2;
 
             scene.add(portalMesh);
@@ -697,14 +750,23 @@
         }
 
         function checkPortalTeleport() {
+            const now = Date.now();
+            if (now - lastPortalTeleportTime < 1500) return; // 1.5 Second Cooldown to fix back-and-forth bounce glitch
+
             const blue = activePortals[socket.id + '_blue'];
             const orange = activePortals[socket.id + '_orange'];
             if (!blue || !orange) return;
 
-            if (localGoose.position.distanceTo(blue.position) < 2.0) {
+            const localPos = localGoose.position;
+
+            if (localPos.distanceTo(blue.position) < 2.2) {
                 localGoose.position.copy(orange.position);
-            } else if (localGoose.position.distanceTo(orange.position) < 2.0) {
+                localGoose.position.y += 0.5;
+                lastPortalTeleportTime = now;
+            } else if (localPos.distanceTo(orange.position) < 2.2) {
                 localGoose.position.copy(blue.position);
+                localGoose.position.y += 0.5;
+                lastPortalTeleportTime = now;
             }
         }
 
@@ -799,6 +861,7 @@
         }
 
         function createTrees() {
+            treeColliders = [];
             const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 3, 6);
             const leavesGeo = new THREE.ConeGeometry(2.5, 7, 6);
             const trunkMat = createToonMaterial(0x5c3d2e);
@@ -818,6 +881,7 @@
                 const leaves = new THREE.Mesh(leavesGeo, leavesMat); leaves.position.y = 5; attachOutline(leaves, 1.08); treeGroup.add(leaves);
 
                 scene.add(treeGroup);
+                treeColliders.push({ x: tx, z: tz, radius: 1.8 });
             }
         }
 
@@ -847,7 +911,6 @@
             requestAnimationFrame(animate);
 
             if (!inCutscene && document.activeElement !== document.getElementById('chat-input')) {
-                let moved = false;
                 let moveSpeed = isSliding ? 0.525 : 0.35;
 
                 const moveVector = new THREE.Vector3();
@@ -860,8 +923,10 @@
                     moveVector.normalize();
                     moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), localGoose.rotation.y);
                     localGoose.position.addScaledVector(moveVector, moveSpeed);
-                    moved = true;
                 }
+
+                // Apply collisions to trees, stage walls, and Kanye NPCs
+                handleCollisions();
 
                 velocityY += gravity;
                 localGoose.position.y += velocityY;
@@ -876,12 +941,10 @@
                 updateSlide();
                 checkPortalTeleport();
 
-                // Trigger Cave Cutscene when stepping into the underground cave hole
                 if (!cutsceneTriggered && localGoose.position.distanceTo(cavePosition) < caveRadius) {
                     triggerCutscene();
                 }
 
-                // Broadcast local player movement & head pitch angle
                 socket.emit('playerMovement', {
                     x: localGoose.position.x,
                     z: localGoose.position.z,
