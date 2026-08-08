@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goose World - Seamless Portal Rendering</title>
+    <title>Goose World - Massive Map & Portal System</title>
     <style>
         body { 
             margin: 0; 
@@ -50,6 +50,8 @@
         #hud h1 { margin: 0 0 5px 0; font-size: 20px; text-transform: uppercase; }
         #hud p { margin: 3px 0; font-size: 14px; font-weight: bold; }
         
+        #cave-tracker { color: #d90429; font-weight: 900; }
+
         #player-hp-bar-container {
             width: 180px; height: 16px; background: #333; border: 2px solid #000;
             border-radius: 8px; margin-top: 6px; overflow: hidden;
@@ -179,6 +181,7 @@
         <p>Active Geese: <span id="geese-count">1</span></p>
         <p>Hostile Kanyes: <span id="kanye-count">0</span></p>
         <p>Kanyes Defeated: <span id="score-count">0</span></p>
+        <p>📍 Trump's Cave: <span id="cave-tracker">300m</span></p>
         <p>Goose Health:</p>
         <div id="player-hp-bar-container"><div id="player-hp-fill"></div></div>
     </div>
@@ -209,7 +212,9 @@
         let kanyeTexture, kanyeTileTexture;
         let keys = {};
         let toonGradientMap;
-        const terrainSize = 450;
+        
+        // Massive Map Size Scaling
+        const terrainSize = 3000;
         let playerNickname = "Goose";
         let currentMap = "meadow";
         let score = 0;
@@ -232,10 +237,11 @@
         let blueRenderTarget, orangeRenderTarget, portalCamera;
         let portalCooldown = 0;
 
-        // Cave Hole & Trump Boss Logic
+        // Cave Hole, Trump Boss & Sky Beacon
         const cavePosition = new THREE.Vector3(-140, 0, -140);
         const caveDepth = -25;
-        const caveRadius = 18;
+        const caveRadius = 22;
+        let caveBeaconMesh = null;
         let trumpMeshGroup = null;
         let trumpHP = 500;
         let trumpMaxHP = 500;
@@ -256,9 +262,9 @@
                 return caveDepth + (0 - caveDepth) * factor;
             }
             if (Math.hypot(x, z) < 35) return 0;
-            if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
+            if (currentMap === "desert") return Math.sin(x * 0.02) * 6.0 + Math.cos(z * 0.02) * 6.0;
             if (currentMap === "cyber") return 0;
-            return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
+            return Math.sin(x * 0.015) * 12.0 + Math.cos(z * 0.015) * 12.0;
         }
 
         function createToonMaterial(colorHex, side = THREE.FrontSide, map = null) {
@@ -366,6 +372,18 @@
             const caveFloor = new THREE.Mesh(caveFloorGeo, createToonMaterial(0x1a1a1a));
             caveFloor.position.set(cavePosition.x, caveDepth + 0.1, cavePosition.z);
             scene.add(caveFloor);
+
+            // 🌟 GIANT SKY BEACON OVER TRUMP'S CAVE (Fixes "Can't find Trump's Cave")
+            const beaconGeo = new THREE.CylinderGeometry(3, 8, 800, 16, 1, true);
+            const beaconMat = new THREE.MeshBasicMaterial({
+                color: 0xff477e,
+                transparent: true,
+                opacity: 0.5,
+                side: THREE.DoubleSide
+            });
+            caveBeaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
+            caveBeaconMesh.position.set(cavePosition.x, 400, cavePosition.z);
+            scene.add(caveBeaconMesh);
 
             trumpMeshGroup = new THREE.Group();
             
@@ -553,11 +571,11 @@
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x70d6ff);
-            scene.fog = new THREE.FogExp2(0x70d6ff, 0.0035);
+            scene.fog = new THREE.FogExp2(0x70d6ff, 0.0008);
 
-            mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
             
-            // DUAL Render Targets for Blue & Orange Portals
+            // Dual Render Targets for Blue & Orange Portals
             blueRenderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
                 minFilter: THREE.LinearFilter,
                 magFilter: THREE.LinearFilter,
@@ -568,7 +586,7 @@
                 magFilter: THREE.LinearFilter,
                 format: THREE.RGBAFormat
             });
-            portalCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            portalCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 4000);
 
             localGoose = new THREE.Group();
             pitchObject = new THREE.Group();
@@ -618,14 +636,14 @@
                 kanyeTileTexture = tex.clone();
                 kanyeTileTexture.wrapS = THREE.RepeatWrapping;
                 kanyeTileTexture.wrapT = THREE.RepeatWrapping;
-                kanyeTileTexture.repeat.set(40, 40);
+                kanyeTileTexture.repeat.set(160, 160);
                 kanyeTileTexture.needsUpdate = true;
             }, undefined, () => { 
                 kanyeTexture = createKanyeFallbackTexture();
                 kanyeTileTexture = kanyeTexture;
                 kanyeTileTexture.wrapS = THREE.RepeatWrapping;
                 kanyeTileTexture.wrapT = THREE.RepeatWrapping;
-                kanyeTileTexture.repeat.set(40, 40);
+                kanyeTileTexture.repeat.set(160, 160);
             });
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
@@ -736,7 +754,7 @@
         }
 
         // ===================================================
-        // 🌀 REAL-TIME SEAMLESS PORTAL SYSTEM (FIXED)
+        // 🌀 REAL-TIME SEAMLESS PORTAL SYSTEM
         // ===================================================
 
         function createPortalMaterial(type, renderTarget) {
@@ -843,7 +861,6 @@
 
             if (!bluePortal || !orangePortal) return;
 
-            // Render view FOR Blue portal (looking OUT from Orange portal)
             updateVirtualCamera(mainCamera, bluePortal.mesh, orangePortal.mesh);
             bluePortal.mesh.visible = false;
             renderer.setRenderTarget(blueRenderTarget);
@@ -851,7 +868,6 @@
             renderer.render(scene, portalCamera);
             bluePortal.mesh.visible = true;
 
-            // Render view FOR Orange portal (looking OUT from Blue portal)
             updateVirtualCamera(mainCamera, orangePortal.mesh, bluePortal.mesh);
             orangePortal.mesh.visible = false;
             renderer.setRenderTarget(orangeRenderTarget);
@@ -894,7 +910,7 @@
             const playerPos = localGoose.position.clone().add(new THREE.Vector3(0, 1.2, 0));
 
             if (tryTeleport(playerPos, blue, orange)) {
-                portalCooldown = 25; // Prevent instant trigger back-and-forth
+                portalCooldown = 25;
                 return;
             }
             if (tryTeleport(playerPos, orange, blue)) {
@@ -1015,11 +1031,12 @@
             const trunkMat = createToonMaterial(0x5c3d2e);
             const leavesMat = createToonMaterial(0x2d6a4f);
 
-            for (let i = 0; i < 65; i++) {
-                const tx = (Math.random() - 0.5) * 360;
-                const tz = (Math.random() - 0.5) * 360;
+            // Scaled up tree count to match huge world size
+            for (let i = 0; i < 500; i++) {
+                const tx = (Math.random() - 0.5) * (terrainSize - 100);
+                const tz = (Math.random() - 0.5) * (terrainSize - 100);
 
-                if (Math.hypot(tx, tz) < 35 || Math.hypot(tx - cavePosition.x, tz - cavePosition.z) < 35) continue;
+                if (Math.hypot(tx, tz) < 45 || Math.hypot(tx - cavePosition.x, tz - cavePosition.z) < 45) continue;
 
                 const ty = getHillHeight(tx, tz);
                 const treeGroup = new THREE.Group();
@@ -1034,7 +1051,7 @@
         }
 
         function createTerrain() {
-            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 140, 140);
+            const floorGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, 250, 250);
             floorGeo.rotateX(-Math.PI / 2);
             const pos = floorGeo.attributes.position;
             for (let i = 0; i < pos.count; i++) pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
@@ -1055,11 +1072,28 @@
             document.getElementById('geese-count').innerText = Object.keys(otherGeese).length + 1;
         }
 
+        function updateCaveTrackerHUD() {
+            if (!localGoose) return;
+            const dist = Math.round(localGoose.position.distanceTo(cavePosition));
+            
+            // HUD Compass direction math
+            const dx = cavePosition.x - localGoose.position.x;
+            const dz = cavePosition.z - localGoose.position.z;
+            let dir = " [";
+            if (dz < -20) dir += "N";
+            if (dz > 20) dir += "S";
+            if (dx > 20) dir += "E";
+            if (dx < -20) dir += "W";
+            dir += "]";
+
+            document.getElementById('cave-tracker').innerText = `${dist}m ${dir}`;
+        }
+
         function animate() {
             requestAnimationFrame(animate);
 
             if (!inCutscene && document.activeElement !== document.getElementById('chat-input')) {
-                let moveSpeed = isSliding ? 0.525 : 0.35;
+                let moveSpeed = isSliding ? 0.65 : 0.45;
 
                 const moveVector = new THREE.Vector3();
                 if (keys['KeyW']) moveVector.z -= 1;
@@ -1100,6 +1134,11 @@
                 });
             }
 
+            if (caveBeaconMesh) {
+                caveBeaconMesh.rotation.y += 0.01;
+            }
+
+            updateCaveTrackerHUD();
             updateCutscene();
             animateMicSword();
             updateKanyeNPCs();
