@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goose World - Portal Surface & Orientation Alignment</title>
+    <title>Goose World - Seamless Portal Rendering</title>
     <style>
         body { 
             margin: 0; 
@@ -228,7 +228,9 @@
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        let lastPortalTeleportTime = 0;
+        // Render Targets & Seamless Portal Virtual Camera
+        let portalRenderTarget, portalCamera;
+        let lastPlayerPos = new THREE.Vector3();
 
         // Cave Hole & Trump Boss Logic
         const cavePosition = new THREE.Vector3(-140, 0, -140);
@@ -531,6 +533,7 @@
             applyMapTheme();
             
             localGoose.position.set(0, getHillHeight(0, 35), 35);
+            lastPlayerPos.copy(localGoose.position);
 
             document.getElementById('canvas-container').requestPointerLock();
             if (socket) socket.emit('setNickname', playerNickname);
@@ -555,6 +558,14 @@
 
             mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             
+            // Off-screen Portal Render Target & Camera Setup
+            portalRenderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat
+            });
+            portalCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
             localGoose = new THREE.Group();
             pitchObject = new THREE.Group();
             pitchObject.position.y = 1.6;
@@ -707,10 +718,63 @@
             });
             window.addEventListener('contextmenu', (e) => e.preventDefault());
 
+            window.addEventListener('resize', () => {
+                mainCamera.aspect = window.innerWidth / window.innerHeight;
+                mainCamera.updateProjectionMatrix();
+                portalCamera.aspect = window.innerWidth / window.innerHeight;
+                portalCamera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                portalRenderTarget.setSize(window.innerWidth, window.innerHeight);
+            });
+
             animate();
         }
 
-        /* 🌀 PORTAL GUN: DYNAMIC SURFACE NORMAL & OUTWARD TELEPORT EXIT ORIENTATION */
+        // ===================================================
+        // 🌀 REAL-TIME SEAMLESS PORTAL SYSTEM
+        // ===================================================
+
+        function createPortalMaterial(type) {
+            const borderColor = (type === 'blue') ? new THREE.Color(0x00d2ff) : new THREE.Color(0xff7b00);
+            
+            return new THREE.ShaderMaterial({
+                uniforms: {
+                    map: { value: portalRenderTarget.texture },
+                    borderColor: { value: borderColor }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    varying vec4 vScreenPos;
+                    void main() {
+                        vUv = uv;
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        vScreenPos = projectionMatrix * mvPosition;
+                        gl_Position = vScreenPos;
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D map;
+                    uniform vec3 borderColor;
+                    varying vec2 vUv;
+                    varying vec4 vScreenPos;
+
+                    void main() {
+                        vec2 uv = (vScreenPos.xy / vScreenPos.w) * 0.5 + 0.5;
+                        vec4 portalView = texture2D(map, uv);
+
+                        float dist = distance(vUv, vec2(0.5));
+                        float borderMask = smoothstep(0.42, 0.48, dist);
+
+                        if (dist > 0.495) discard; // Smooth oval border cutout
+
+                        vec3 finalColor = mix(portalView.rgb, borderColor, borderMask);
+                        gl_FragColor = vec4(finalColor, 1.0);
+                    }
+                `,
+                side: THREE.DoubleSide
+            });
+        }
+
         function firePortal(type) {
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(new THREE.Vector2(0, 0), mainCamera);
@@ -720,7 +784,6 @@
                 const hit = intersects[0];
                 const point = hit.point;
 
-                // Transform normal from object space to world space so wall normals work correctly
                 const worldNormal = hit.face.normal.clone();
                 worldNormal.transformDirection(hit.object.matrixWorld).normalize();
 
@@ -740,9 +803,9 @@
             const key = playerId + '_' + type;
             if (activePortals[key]) scene.remove(activePortals[key].mesh);
 
-            const ringGeo = new THREE.TorusGeometry(1.5, 0.2, 12, 24);
-            const ringMat = new THREE.MeshBasicMaterial({ color: (type === 'blue') ? 0x00d2ff : 0xff7b00 });
-            const portalMesh = new THREE.Mesh(ringGeo, ringMat);
+            const portalGeo = new THREE.PlaneGeometry(2.5, 4.0);
+            const portalMat = createPortalMaterial(type);
+            const portalMesh = new THREE.Mesh(portalGeo, portalMat);
 
             const normal = new THREE.Vector3(
                 pos.nx !== undefined ? pos.nx : 0, 
@@ -750,63 +813,110 @@
                 pos.nz !== undefined ? pos.nz : 0
             ).normalize();
 
-            // Offset slightly out from wall/ground so torus doesn't clip surface
             portalMesh.position.set(
-                pos.x + normal.x * 0.1,
-                pos.y + normal.y * 0.1,
-                pos.z + normal.z * 0.1
+                pos.x + normal.x * 0.05,
+                pos.y + normal.y * 0.05,
+                pos.z + normal.z * 0.05
             );
 
-            // Dynamically orient portal face along normal
             const lookTarget = portalMesh.position.clone().add(normal);
             portalMesh.lookAt(lookTarget);
 
             scene.add(portalMesh);
 
             activePortals[key] = {
+                type: type,
                 mesh: portalMesh,
                 normal: normal
             };
         }
 
-        function checkPortalTeleport() {
-            const now = Date.now();
-            if (now - lastPortalTeleportTime < 1500) return;
+        function renderPortalViews() {
+            const bluePortal = activePortals[socket.id + '_blue'];
+            const orangePortal = activePortals[socket.id + '_orange'];
 
-            const blueData = activePortals[socket.id + '_blue'];
-            const orangeData = activePortals[socket.id + '_orange'];
-            if (!blueData || !orangeData) return;
+            if (!bluePortal || !orangePortal) return;
 
-            const localPos = localGoose.position;
+            // Compute player distance to both portals
+            const camWorldPos = new THREE.Vector3();
+            mainCamera.getWorldPosition(camWorldPos);
 
-            if (localPos.distanceTo(blueData.mesh.position) < 2.5) {
-                teleportPlayerOut(orangeData);
-                lastPortalTeleportTime = now;
-            } else if (localPos.distanceTo(orangeData.mesh.position) < 2.5) {
-                teleportPlayerOut(blueData);
-                lastPortalTeleportTime = now;
-            }
+            const distToBlue = camWorldPos.distanceTo(bluePortal.mesh.position);
+            const distToOrange = camWorldPos.distanceTo(orangePortal.mesh.position);
+
+            // Render view of whichever portal the player is closer to looking at
+            let inPortal = (distToBlue < distToOrange) ? bluePortal : orangePortal;
+            let outPortal = (distToBlue < distToOrange) ? orangePortal : bluePortal;
+
+            updateVirtualCamera(mainCamera, inPortal.mesh, outPortal.mesh);
+            
+            outPortal.mesh.visible = false;
+            renderer.setRenderTarget(portalRenderTarget);
+            renderer.clear();
+            renderer.render(scene, portalCamera);
+            renderer.setRenderTarget(null);
+            outPortal.mesh.visible = true;
         }
 
-        function teleportPlayerOut(targetPortalData) {
-            const portalPos = targetPortalData.mesh.position;
-            const norm = targetPortalData.normal;
+        function updateVirtualCamera(playerCam, inPortalMesh, outPortalMesh) {
+            const worldCamMat = playerCam.matrixWorld.clone();
+            
+            // Invert Entrance Portal Matrix
+            const inMatrixInverse = new THREE.Matrix4().copy(inPortalMesh.matrixWorld).invert();
+            const playerLocalMatrix = worldCamMat.premultiply(inMatrixInverse);
 
-            // Spawn player out in front of exit portal along normal line
-            localGoose.position.set(
-                portalPos.x + norm.x * 2.5,
-                portalPos.y + (norm.y > 0.5 ? 0.5 : norm.y * 1.5),
-                portalPos.z + norm.z * 2.5
-            );
+            // Flip around Y axis 180 deg to project out from destination normal
+            const rotation180 = new THREE.Matrix4().makeRotationY(Math.PI);
+            playerLocalMatrix.premultiply(rotation180);
 
-            // Face player outward in direction of portal normal
-            if (Math.abs(norm.x) > 0.05 || Math.abs(norm.z) > 0.05) {
-                localGoose.rotation.y = Math.atan2(norm.x, norm.z);
-            }
+            // Transform into World Space of Exit Portal
+            const outMatrix = outPortalMesh.matrixWorld.clone();
+            const virtualCamMatrix = playerLocalMatrix.premultiply(outMatrix);
 
-            // Pitch view flat when exiting vertical surfaces
-            if (Math.abs(norm.y) < 0.5) {
-                pitchObject.rotation.x = 0;
+            portalCamera.matrixAutoUpdate = false;
+            portalCamera.matrixWorld.copy(virtualCamMatrix);
+            virtualCamMatrix.decompose(portalCamera.position, portalCamera.quaternion, portalCamera.scale);
+
+            portalCamera.projectionMatrix.copy(playerCam.projectionMatrix);
+        }
+
+        function checkPortalTeleport() {
+            const blue = activePortals[socket.id + '_blue'];
+            const orange = activePortals[socket.id + '_orange'];
+            if (!blue || !orange) return;
+
+            const currPos = localGoose.position.clone();
+            const headPos = currPos.clone().add(new THREE.Vector3(0, 1.6, 0));
+
+            checkSinglePortalTraversal(lastPlayerPos, headPos, blue, orange);
+            checkSinglePortalTraversal(lastPlayerPos, headPos, orange, blue);
+
+            lastPlayerPos.copy(currPos);
+        }
+
+        function checkSinglePortalTraversal(prevPos, currPos, entryPortal, exitPortal) {
+            const entryMat = entryPortal.mesh.matrixWorld;
+            const entryMatInv = new THREE.Matrix4().copy(entryMat).invert();
+
+            const localPrev = prevPos.clone().applyMatrix4(entryMatInv);
+            const localCurr = currPos.clone().applyMatrix4(entryMatInv);
+
+            // Check if player crossed portal plane bounds from front to back
+            if (localPrev.z > 0 && localCurr.z <= 0 && Math.abs(localCurr.x) < 1.4 && Math.abs(localCurr.y) < 2.2) {
+                const rot180 = new THREE.Matrix4().makeRotationY(Math.PI);
+                
+                // Transform position
+                const newLocalPos = localCurr.clone().applyMatrix4(rot180);
+                const targetWorldPos = newLocalPos.applyMatrix4(exitPortal.mesh.matrixWorld);
+
+                localGoose.position.copy(targetWorldPos.sub(new THREE.Vector3(0, 1.6, 0)));
+
+                // Transform player orientation seamlessly
+                const entryNormal = entryPortal.normal;
+                const exitNormal = exitPortal.normal;
+
+                const angleY = Math.atan2(exitNormal.x, exitNormal.z) - Math.atan2(entryNormal.x, entryNormal.z) + Math.PI;
+                localGoose.rotation.y += angleY;
             }
         }
 
@@ -996,6 +1106,11 @@
             animateMicSword();
             updateKanyeNPCs();
             updateTrumpBoss();
+
+            // 1. Render Portal view texture to offscreen target
+            renderPortalViews();
+
+            // 2. Render Main Camera View to screen
             renderer.render(scene, mainCamera);
         }
 
