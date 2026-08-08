@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Goose World - Cave & Trump Boss Battle</title>
+    <title>Goose World - Cave Hole, Dynamic Head Pitch & Weapon Wheel</title>
     <style>
         body { 
             margin: 0; 
@@ -83,6 +83,20 @@
             letter-spacing: 3px; text-align: center;
         }
 
+        /* Inventory Selection Hotbar */
+        #inventory-hud {
+            position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 12px; background: rgba(0,0,0,0.75); border: 3px solid #fff;
+            padding: 8px 12px; border-radius: 12px; z-index: 15;
+        }
+        .inv-slot {
+            width: 60px; height: 60px; border: 3px solid #555; background: #222;
+            border-radius: 8px; color: #fff; font-size: 22px; display: flex;
+            align-items: center; justify-content: center; cursor: pointer; position: relative;
+        }
+        .inv-slot.active { border-color: #ffe600; background: #ff477e; box-shadow: 0 0 10px #ffe600; }
+        .inv-slot span { position: absolute; top: 2px; left: 4px; font-size: 10px; font-weight: bold; }
+
         #honk-text {
             position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
             font-size: 80px; font-weight: 900; color: #ff477e;
@@ -155,6 +169,12 @@
 
     <div id="canvas-container"></div>
     <div id="crosshair"></div>
+    
+    <div id="inventory-hud">
+        <div id="slot-1" class="inv-slot active" onclick="selectWeapon('mic')"><span>1</span>🎙️</div>
+        <div id="slot-2" class="inv-slot" onclick="selectWeapon('portal')"><span>2</span>🌀</div>
+    </div>
+
     <div id="hud">
         <h1>🎙️ Mic Melee FPS</h1>
         <p>Active Geese: <span id="geese-count">1</span></p>
@@ -167,10 +187,11 @@
     <div id="controls">
         <b>CLICK SCREEN TO LOCK MOUSE</b><br>
         [W, A, S, D] : Walk<br>
+        [1 / 2] : Switch Weapon (1: Mic, 2: Portal Gun)<br>
+        [LEFT CLICK] : Attack / Fire Blue Portal<br>
+        [RIGHT CLICK] : Fire Orange Portal<br>
         [C / CTRL] : 50% Speed Boost Slide<br>
-        [SPACE] : Jump<br>
-        [LEFT CLICK / E] : Mic Attack!<br>
-        [T / ENTER] : Open Chat
+        [SPACE] : Jump | [T / ENTER] : Chat
     </div>
 
     <div id="chat-container">
@@ -180,9 +201,13 @@
 
     <script>
         let scene, mainCamera, renderer, socket;
-        let localGoose, pitchObject, micWeaponGroup;
+        let localGoose, pitchObject, currentWeaponGroup;
+        let micWeaponGroup, portalGunGroup;
+        let selectedWeapon = "mic";
+
         let otherGeese = {};
         let kanyeNPCs = {};
+        let activePortals = {};
         let kanyeTexture, kanyeTileTexture;
         let keys = {};
         let toonGradientMap;
@@ -203,8 +228,10 @@
         const gravity = -0.015;
         const jumpStrength = 0.35;
 
-        // Cave & Trump Boss Logic
+        // Cave Hole & Trump Boss Logic
         const cavePosition = new THREE.Vector3(-140, 0, -140);
+        const caveDepth = -25;
+        const caveRadius = 18;
         let trumpMeshGroup = null;
         let trumpHP = 500;
         let trumpMaxHP = 500;
@@ -215,15 +242,20 @@
         let lastDamageTime = 0;
 
         function getHillHeight(x, z) {
+            const distToCave = Math.hypot(x - cavePosition.x, z - cavePosition.z);
+            if (distToCave < caveRadius) {
+                // Slope smooth hole into the ground
+                const factor = Math.pow(distToCave / caveRadius, 2);
+                return caveDepth + (0 - caveDepth) * factor;
+            }
             if (Math.hypot(x, z) < 35) return 0;
-            if (Math.hypot(x - cavePosition.x, z - cavePosition.z) < 30) return 0;
             if (currentMap === "desert") return Math.sin(x * 0.05) * 4.0 + Math.cos(z * 0.05) * 4.0;
             if (currentMap === "cyber") return 0;
             return Math.sin(x * 0.03) * 8.0 + Math.cos(z * 0.03) * 8.0;
         }
 
-        function createToonMaterial(colorHex, side = THREE.FrontSide) {
-            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap, side: side });
+        function createToonMaterial(colorHex, side = THREE.FrontSide, map = null) {
+            return new THREE.MeshToonMaterial({ color: colorHex, gradientMap: toonGradientMap, side: side, map: map });
         }
 
         function attachOutline(mesh, outlineScale = 1.08) {
@@ -235,24 +267,47 @@
 
         function createMicrophoneWeapon() {
             const micGroup = new THREE.Group();
-
             const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.03, 0.8, 12), createToonMaterial(0x222222));
-            handle.position.y = 0.2;
-            attachOutline(handle, 1.1);
-            micGroup.add(handle);
+            handle.position.y = 0.2; attachOutline(handle, 1.1); micGroup.add(handle);
 
             const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 12), createToonMaterial(0xcccccc));
-            ring.position.y = 0.55;
-            micGroup.add(ring);
+            ring.position.y = 0.55; micGroup.add(ring);
 
             const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 14), createToonMaterial(0xdddddd));
-            head.position.y = 0.65;
-            attachOutline(head, 1.12);
-            micGroup.add(head);
+            head.position.y = 0.65; attachOutline(head, 1.12); micGroup.add(head);
 
             micGroup.position.set(0.4, -0.3, -0.6);
             micGroup.rotation.set(0.2, -0.3, -0.2);
             return micGroup;
+        }
+
+        function createPortalGunWeapon() {
+            const gunGroup = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 0.9, 12), createToonMaterial(0xffffff));
+            body.rotation.x = Math.PI / 2; attachOutline(body, 1.08); gunGroup.add(body);
+
+            const core = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), createToonMaterial(0x00d2ff));
+            core.position.set(0, 0, -0.1); gunGroup.add(core);
+
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 12), createToonMaterial(0x111111));
+            barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0, -0.5); gunGroup.add(barrel);
+
+            gunGroup.position.set(0.4, -0.3, -0.6);
+            return gunGroup;
+        }
+
+        function selectWeapon(type) {
+            selectedWeapon = type;
+            document.getElementById('slot-1').classList.toggle('active', type === 'mic');
+            document.getElementById('slot-2').classList.toggle('active', type === 'portal');
+
+            pitchObject.remove(micWeaponGroup);
+            pitchObject.remove(portalGunGroup);
+
+            if (type === 'mic') pitchObject.add(micWeaponGroup);
+            if (type === 'portal') pitchObject.add(portalGunGroup);
+
+            if (socket) socket.emit('switchWeapon', type);
         }
 
         function createNametagSprite(nickname) {
@@ -289,69 +344,42 @@
             beak.position.set(0, 1.1, -0.45); beak.rotation.x = -Math.PI / 2;
             attachOutline(beak, 1.15); headGroup.add(beak);
 
+            const micHeld = createMicrophoneWeapon();
+            micHeld.position.set(0.6, 0.2, -0.2);
+            headGroup.add(micHeld);
+
             group.add(headGroup);
             group.add(createNametagSprite(nickname));
-            return { group, headGroup };
+            return { group, headGroup, micHeld };
         }
 
-        /* 🏛️ CAVE & DONALD TRUMP MODEL */
+        /* 🕳️ HOLE-IN-THE-GROUND CAVE & TRUMP BOSS */
         function createCaveAndTrump() {
-            // Cave Structure
-            const caveGroup = new THREE.Group();
-            caveGroup.position.copy(cavePosition);
+            // Cave Floor Base Inside Hole
+            const caveFloorGeo = new THREE.CircleGeometry(caveRadius, 32);
+            caveFloorGeo.rotateX(-Math.PI / 2);
+            const caveFloor = new THREE.Mesh(caveFloorGeo, createToonMaterial(0x1a1a1a));
+            caveFloor.position.set(cavePosition.x, caveDepth + 0.1, cavePosition.z);
+            scene.add(caveFloor);
 
-            const rockMat = createToonMaterial(0x3a3a3a, THREE.DoubleSide);
-            const outerDome = new THREE.Mesh(new THREE.SphereGeometry(22, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2), rockMat);
-            outerDome.scale.set(1.2, 0.8, 1.2);
-            attachOutline(outerDome, 1.02);
-            caveGroup.add(outerDome);
-
-            // Entrance Tunnel cutout framing
-            const entranceArch = new THREE.Mesh(new THREE.TorusGeometry(8, 2.5, 8, 16, Math.PI), rockMat);
-            entranceArch.position.set(0, 0, 18);
-            attachOutline(entranceArch, 1.05);
-            caveGroup.add(entranceArch);
-
-            scene.add(caveGroup);
-
-            // Donald Trump Boss: Capsule body + Yellow Cuboid Hair
+            // Donald Trump Boss inside Cave Hole Base
             trumpMeshGroup = new THREE.Group();
             
-            // Capsule Body (Navy Suit)
             const bodyGeo = new THREE.CylinderGeometry(1.6, 1.6, 5.5, 16);
-            const bodyMat = createToonMaterial(0x0a192f);
-            const body = new THREE.Mesh(bodyGeo, bodyMat);
-            body.position.y = 2.75;
-            attachOutline(body, 1.05);
-            trumpMeshGroup.add(body);
+            const body = new THREE.Mesh(bodyGeo, createToonMaterial(0x0a192f));
+            body.position.y = 2.75; attachOutline(body, 1.05); trumpMeshGroup.add(body);
 
-            // Red Tie
-            const tieGeo = new THREE.BoxGeometry(0.4, 3, 0.2);
-            const tieMat = createToonMaterial(0xd90429);
-            const tie = new THREE.Mesh(tieGeo, tieMat);
-            tie.position.set(0, 2.5, 1.65);
-            trumpMeshGroup.add(tie);
+            const tie = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3, 0.2), createToonMaterial(0xd90429));
+            tie.position.set(0, 2.5, 1.65); trumpMeshGroup.add(tie);
 
-            // Head (Peach Sphere)
-            const headGeo = new THREE.SphereGeometry(1.4, 16, 16);
-            const headMat = createToonMaterial(0xffcad4);
-            const head = new THREE.Mesh(headGeo, headMat);
-            head.position.y = 6.0;
-            attachOutline(head, 1.05);
-            trumpMeshGroup.add(head);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 16), createToonMaterial(0xffcad4));
+            head.position.y = 6.0; attachOutline(head, 1.05); trumpMeshGroup.add(head);
 
-            // Yellow Cuboid Hair
-            const hairGeo = new THREE.BoxGeometry(3.2, 1.2, 3.2);
-            const hairMat = createToonMaterial(0xffe600);
-            const hair = new THREE.Mesh(hairGeo, hairMat);
-            hair.position.set(0, 7.2, 0);
-            attachOutline(hair, 1.05);
-            trumpMeshGroup.add(hair);
+            const hair = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.2, 3.2), createToonMaterial(0xffe600));
+            hair.position.set(0, 7.2, 0); attachOutline(hair, 1.05); trumpMeshGroup.add(hair);
 
             trumpMeshGroup.add(createNametagSprite("DONALD TRUMP"));
-
-            // Place inside back of cave
-            trumpMeshGroup.position.set(cavePosition.x, 0, cavePosition.z - 5);
+            trumpMeshGroup.position.set(cavePosition.x, caveDepth, cavePosition.z);
             scene.add(trumpMeshGroup);
         }
 
@@ -368,15 +396,15 @@
             if (!inCutscene) return;
             cutsceneTimer += 0.015;
 
-            // Pan camera towards Donald Trump inside the cave
+            // Pan camera down into the underground cave hole
             const targetCamPos = new THREE.Vector3(
-                cavePosition.x + Math.sin(cutsceneTimer * 2) * 8,
-                3.5,
-                cavePosition.z + 12
+                cavePosition.x + Math.sin(cutsceneTimer * 2) * 10,
+                caveDepth + 8,
+                cavePosition.z + 14
             );
             
             mainCamera.position.lerp(targetCamPos, 0.05);
-            mainCamera.lookAt(trumpMeshGroup.position.clone().add(new THREE.Vector3(0, 4, 0)));
+            mainCamera.lookAt(trumpMeshGroup.position.clone().add(new THREE.Vector3(0, 3, 0)));
 
             if (cutsceneTimer >= 4.0) {
                 inCutscene = false;
@@ -394,18 +422,13 @@
             ctx.fillStyle = '#8d5524'; ctx.fillRect(0, 0, 128, 128);
             ctx.fillStyle = '#111'; ctx.fillRect(20, 30, 35, 25); ctx.fillRect(73, 30, 35, 25);
             ctx.fillStyle = '#ff477e'; ctx.fillRect(35, 80, 58, 15);
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.wrapS = THREE.RepeatWrapping;
-            tex.wrapT = THREE.RepeatWrapping;
-            tex.repeat.set(50, 50);
-            return tex;
+            return new THREE.CanvasTexture(canvas);
         }
 
         function spawnKanyeMesh(kData) {
             const group = new THREE.Group();
             const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10), createToonMaterial(0x111111));
-            body.position.y = 1.1;
-            attachOutline(body, 1.08); group.add(body);
+            body.position.y = 1.1; attachOutline(body, 1.08); group.add(body);
 
             const headSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: kanyeTexture, transparent: true }));
             headSprite.scale.set(2.5, 2.5, 1); headSprite.position.y = 2.8; group.add(headSprite);
@@ -446,7 +469,6 @@
         function updateTrumpBoss() {
             if (!isTrumpActive || !trumpMeshGroup || trumpHP <= 0 || inCutscene) return;
 
-            // Move towards nearest player
             const pos = trumpMeshGroup.position;
             const distToLocal = localGoose.position.distanceTo(pos);
             const angle = Math.atan2(localGoose.position.x - pos.x, localGoose.position.z - pos.z);
@@ -456,7 +478,6 @@
             pos.y = getHillHeight(pos.x, pos.z);
             trumpMeshGroup.rotation.y = angle;
 
-            // Damage player if close
             if (distToLocal < 3.5 && Date.now() - lastDamageTime > 800) {
                 lastDamageTime = Date.now();
                 socket.emit('playerTakeDamage', 15);
@@ -498,6 +519,7 @@
             
             pitchObject.add(mainCamera);
             micWeaponGroup = createMicrophoneWeapon();
+            portalGunGroup = createPortalGunWeapon();
             pitchObject.add(micWeaponGroup);
 
             localGoose.add(pitchObject);
@@ -538,11 +560,14 @@
                 kanyeTileTexture = tex.clone();
                 kanyeTileTexture.wrapS = THREE.RepeatWrapping;
                 kanyeTileTexture.wrapT = THREE.RepeatWrapping;
-                kanyeTileTexture.repeat.set(50, 50);
+                kanyeTileTexture.repeat.set(40, 40);
                 kanyeTileTexture.needsUpdate = true;
             }, undefined, () => { 
                 kanyeTexture = createKanyeFallbackTexture();
                 kanyeTileTexture = kanyeTexture;
+                kanyeTileTexture.wrapS = THREE.RepeatWrapping;
+                kanyeTileTexture.wrapT = THREE.RepeatWrapping;
+                kanyeTileTexture.repeat.set(40, 40);
             });
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.85));
@@ -559,9 +584,14 @@
             socket.on('playerMoved', (p) => {
                 if (otherGeese[p.id]) {
                     otherGeese[p.id].group.position.set(p.x, getHillHeight(p.x, p.z), p.z);
-                    otherGeese[p.id].group.rotation.y = p.rotation;
+                    otherGeese[p.id].group.rotation.y = p.rotationY;
+                    // Mirror vertical pitch/head movements to other players
+                    if (otherGeese[p.id].headGroup) {
+                        otherGeese[p.id].headGroup.rotation.x = p.rotationX;
+                    }
                 }
             });
+
             socket.on('currentKanyes', (kMap) => { Object.values(kMap).forEach(spawnKanyeMesh); });
             socket.on('kanyeSpawned', spawnKanyeMesh);
             socket.on('kanyeDefeated', (data) => {
@@ -576,10 +606,11 @@
                 }
             });
 
+            socket.on('portalSpawned', (data) => { spawnPortalMesh(data.playerId, data.type, data.pos); });
+
             socket.on('trumpState', (tState) => {
                 isTrumpActive = tState.active;
-                trumpHP = tState.hp;
-                trumpMaxHP = tState.maxHp;
+                trumpHP = tState.hp; trumpMaxHP = tState.maxHp;
                 if (isTrumpActive) document.getElementById('boss-hp-container').style.display = 'block';
             });
 
@@ -598,8 +629,7 @@
                 if (trumpMeshGroup) scene.remove(trumpMeshGroup);
                 document.getElementById('boss-hp-container').style.display = 'none';
                 const honkUI = document.getElementById('honk-text');
-                honkUI.innerText = "DONALD TRUMP DEFEATED!";
-                honkUI.style.opacity = '1';
+                honkUI.innerText = "DONALD TRUMP DEFEATED!"; honkUI.style.opacity = '1';
                 setTimeout(() => { honkUI.style.opacity = '0'; }, 3000);
             });
 
@@ -616,7 +646,7 @@
                 }
             });
 
-            // Key Events
+            // Key Controls & Mouse Clicks
             const chatInput = document.getElementById('chat-input');
             window.addEventListener('keydown', (e) => {
                 if (document.activeElement === chatInput) {
@@ -624,40 +654,82 @@
                     return;
                 }
                 keys[e.code] = true;
+                if (e.code === 'Digit1') selectWeapon('mic');
+                if (e.code === 'Digit2') selectWeapon('portal');
                 if (e.code === 'Space' && isGrounded && !inCutscene) { velocityY = jumpStrength; isGrounded = false; }
-                if (e.code === 'KeyE') performMicAttack();
                 if ((e.code === 'KeyC' || e.code === 'ControlLeft') && !isSliding) startSlide();
             });
             window.addEventListener('keyup', (e) => { keys[e.code] = false; });
             window.addEventListener('mousedown', (e) => {
-                if (isPointerLocked && e.button === 0) performMicAttack();
+                if (!isPointerLocked) return;
+                if (e.button === 0) performPrimaryAction();
+                if (e.button === 2 && selectedWeapon === 'portal') firePortal('orange');
             });
+            window.addEventListener('contextmenu', (e) => e.preventDefault());
 
             animate();
         }
 
-        /* 💨 SLIDE MECHANIC */
+        /* 🌀 PORTAL GUN LOGIC */
+        function firePortal(type) {
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), mainCamera);
+            const intersects = raycaster.intersectObjects(scene.children, true);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0].point;
+                socket.emit('firePortal', { type, x: hit.x, y: hit.y, z: hit.z });
+            }
+        }
+
+        function spawnPortalMesh(playerId, type, pos) {
+            const key = playerId + '_' + type;
+            if (activePortals[key]) scene.remove(activePortals[key]);
+
+            const ringGeo = new THREE.TorusGeometry(1.5, 0.2, 12, 24);
+            const ringMat = new THREE.MeshBasicMaterial({ color: (type === 'blue') ? 0x00d2ff : 0xff7b00 });
+            const portalMesh = new THREE.Mesh(ringGeo, ringMat);
+            portalMesh.position.set(pos.x, pos.y + 1, pos.z);
+            portalMesh.rotation.x = Math.PI / 2;
+
+            scene.add(portalMesh);
+            activePortals[key] = portalMesh;
+        }
+
+        function checkPortalTeleport() {
+            const blue = activePortals[socket.id + '_blue'];
+            const orange = activePortals[socket.id + '_orange'];
+            if (!blue || !orange) return;
+
+            if (localGoose.position.distanceTo(blue.position) < 2.0) {
+                localGoose.position.copy(orange.position);
+            } else if (localGoose.position.distanceTo(orange.position) < 2.0) {
+                localGoose.position.copy(blue.position);
+            }
+        }
+
+        function performPrimaryAction() {
+            if (selectedWeapon === 'portal') {
+                firePortal('blue');
+            } else {
+                performMicAttack();
+            }
+        }
+
         function startSlide() {
             if (inCutscene) return;
-            isSliding = true;
-            slideTimer = 35;
+            isSliding = true; slideTimer = 35;
         }
 
         function updateSlide() {
             if (!isSliding) return;
-            slideTimer--;
-            pitchObject.position.y = 0.8;
-            if (slideTimer <= 0) {
-                isSliding = false;
-                pitchObject.position.y = 1.6;
-            }
+            slideTimer--; pitchObject.position.y = 0.8;
+            if (slideTimer <= 0) { isSliding = false; pitchObject.position.y = 1.6; }
         }
 
-        /* 🎙️ MELEE HIT REGISTRATION */
         function performMicAttack() {
             if (isAttacking || inCutscene) return;
-            isAttacking = true;
-            attackProgress = 0;
+            isAttacking = true; attackProgress = 0;
 
             const honkUI = document.getElementById('honk-text');
             honkUI.innerText = "MIC SLAM!"; honkUI.style.opacity = '1';
@@ -678,7 +750,7 @@
         }
 
         function animateMicSword() {
-            if (!isAttacking) return;
+            if (!isAttacking || selectedWeapon !== 'mic') return;
             attackProgress += 0.15;
             micWeaponGroup.rotation.x = 0.2 - Math.sin(attackProgress * Math.PI) * 1.5;
             micWeaponGroup.rotation.y = -0.3 + Math.sin(attackProgress * Math.PI) * 1.2;
@@ -712,36 +784,16 @@
             const stageGroup = new THREE.Group();
             stageGroup.position.set(0, 0, 0);
 
-            const platformGeo = new THREE.BoxGeometry(32, 3, 20);
-            const platformMat = createToonMaterial(0x1a1a1a);
-            const platform = new THREE.Mesh(platformGeo, platformMat);
-            platform.position.y = 1.5;
-            attachOutline(platform, 1.02);
-            stageGroup.add(platform);
+            const platform = new THREE.Mesh(new THREE.BoxGeometry(32, 3, 20), createToonMaterial(0x1a1a1a));
+            platform.position.y = 1.5; attachOutline(platform, 1.02); stageGroup.add(platform);
 
-            const backdropGeo = new THREE.BoxGeometry(32, 14, 0.6);
-            const backdropMat = createToonMaterial(0x0a0a0a);
-            const backdrop = new THREE.Mesh(backdropGeo, backdropMat);
-            backdrop.position.set(0, 10, -9.5);
-            attachOutline(backdrop, 1.02);
-            stageGroup.add(backdrop);
+            const backdrop = new THREE.Mesh(new THREE.BoxGeometry(32, 14, 0.6), createToonMaterial(0x0a0a0a));
+            backdrop.position.set(0, 10, -9.5); attachOutline(backdrop, 1.02); stageGroup.add(backdrop);
 
-            const speakerMat = createToonMaterial(0x222222);
-            const speakerLeft = new THREE.Mesh(new THREE.BoxGeometry(5, 10, 4), speakerMat);
-            speakerLeft.position.set(-13, 8, -7);
-            attachOutline(speakerLeft, 1.05);
-            stageGroup.add(speakerLeft);
+            const speakerLeft = new THREE.Mesh(new THREE.BoxGeometry(5, 10, 4), createToonMaterial(0x222222));
+            speakerLeft.position.set(-13, 8, -7); attachOutline(speakerLeft, 1.05); stageGroup.add(speakerLeft);
 
-            const speakerRight = speakerLeft.clone();
-            speakerRight.position.set(13, 8, -7);
-            stageGroup.add(speakerRight);
-
-            const micStand = new THREE.Group();
-            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3, 8), createToonMaterial(0xcccccc));
-            pole.position.y = 4.5;
-            micStand.add(pole);
-            micStand.position.set(0, 0, -2);
-            stageGroup.add(micStand);
+            const speakerRight = speakerLeft.clone(); speakerRight.position.set(13, 8, -7); stageGroup.add(speakerRight);
 
             scene.add(stageGroup);
         }
@@ -762,15 +814,8 @@
                 const treeGroup = new THREE.Group();
                 treeGroup.position.set(tx, ty, tz);
 
-                const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-                trunk.position.y = 1.5;
-                attachOutline(trunk, 1.08);
-                treeGroup.add(trunk);
-
-                const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-                leaves.position.y = 5;
-                attachOutline(leaves, 1.08);
-                treeGroup.add(leaves);
+                const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.position.y = 1.5; attachOutline(trunk, 1.08); treeGroup.add(trunk);
+                const leaves = new THREE.Mesh(leavesGeo, leavesMat); leaves.position.y = 5; attachOutline(leaves, 1.08); treeGroup.add(leaves);
 
                 scene.add(treeGroup);
             }
@@ -783,11 +828,7 @@
             for (let i = 0; i < pos.count; i++) pos.setY(i, getHillHeight(pos.getX(i), pos.getZ(i)));
             floorGeo.computeVertexNormals();
 
-            const groundMat = new THREE.MeshToonMaterial({
-                map: kanyeTileTexture || kanyeTexture,
-                gradientMap: toonGradientMap
-            });
-
+            const groundMat = createToonMaterial(0xffffff, THREE.FrontSide, kanyeTileTexture || kanyeTexture);
             scene.add(new THREE.Mesh(floorGeo, groundMat));
         }
 
@@ -833,19 +874,20 @@
                 }
 
                 updateSlide();
+                checkPortalTeleport();
 
-                // Trigger Cave Cutscene when entering cave threshold
-                if (!cutsceneTriggered && localGoose.position.distanceTo(cavePosition) < 22) {
+                // Trigger Cave Cutscene when stepping into the underground cave hole
+                if (!cutsceneTriggered && localGoose.position.distanceTo(cavePosition) < caveRadius) {
                     triggerCutscene();
                 }
 
-                if (moved) {
-                    socket.emit('playerMovement', {
-                        x: localGoose.position.x,
-                        z: localGoose.position.z,
-                        rotation: localGoose.rotation.y
-                    });
-                }
+                // Broadcast local player movement & head pitch angle
+                socket.emit('playerMovement', {
+                    x: localGoose.position.x,
+                    z: localGoose.position.z,
+                    rotationY: localGoose.rotation.y,
+                    rotationX: pitchObject.rotation.x
+                });
             }
 
             updateCutscene();
